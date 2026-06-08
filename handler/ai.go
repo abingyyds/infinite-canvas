@@ -206,6 +206,10 @@ func prepareAIProxyBody(path string, body []byte, contentType string) ([]byte, s
 	writeMultipartField(writer, "resolution_name", payload.ResolutionName)
 	writeMultipartField(writer, "preset", payload.Preset)
 	for index, reference := range payload.InputReference {
+		if isHTTPURL(reference) {
+			_ = writer.WriteField("input_reference[]", reference)
+			continue
+		}
 		if err := writeMultipartDataURL(writer, "input_reference[]", reference, fmt.Sprintf("reference-%d", index+1)); err != nil {
 			return nil, "", err
 		}
@@ -278,6 +282,11 @@ func dataURLExt(mimeType string) string {
 
 func escapeMultipartQuote(value string) string {
 	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"").Replace(value)
+}
+
+func isHTTPURL(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
 func readMultipartModel(body []byte, contentType string) string {

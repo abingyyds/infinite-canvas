@@ -84,7 +84,7 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
 }
 
 async function createGrokVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
-    const inputReference = await buildGrokInputReferences(references, videoReferences, audioReferences);
+    const inputReference = await buildGrokInputReferences(config, references, videoReferences, audioReferences);
     const size = normalizeVideoSize(config.size);
     const payload = {
         model,
@@ -154,23 +154,28 @@ async function referenceMediaBlob(storageKey: string | undefined, url: string) {
     }
 }
 
-async function resolveGrokImageUrl(image: ReferenceImage) {
+async function resolveGrokImageUrl(config: AiConfig, image: ReferenceImage) {
+    const directUrl = image.url || image.dataUrl;
+    if (isPublicMediaUrl(directUrl)) return directUrl;
     const dataUrl = await imageToDataUrl(image);
     if (!dataUrl?.startsWith("data:image/")) throw new Error("参考图读取失败，请换一张图片或重新上传");
+    if (config.channelMode === "remote") return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }));
     return dataUrl;
 }
 
-async function resolveGrokVideoUrl(video: ReferenceVideo) {
-    if (video.url.startsWith("data:")) return video.url;
+async function resolveGrokVideoUrl(config: AiConfig, video: ReferenceVideo) {
+    if (isPublicMediaUrl(video.url)) return video.url;
     const blob = await referenceMediaBlob(video.storageKey, video.url);
     if (!blob) throw new Error("参考视频读取失败，请重新上传或使用公网视频 URL");
+    if (config.channelMode === "remote") return uploadReferenceMedia(new File([blob], video.name || "reference-video.mp4", { type: video.type || blob.type || "video/mp4" }));
     return blobToDataUrl(blob);
 }
 
-async function resolveGrokAudioUrl(audio: ReferenceAudio) {
-    if (audio.url.startsWith("data:")) return audio.url;
+async function resolveGrokAudioUrl(config: AiConfig, audio: ReferenceAudio) {
+    if (isPublicMediaUrl(audio.url)) return audio.url;
     const blob = await referenceMediaBlob(audio.storageKey, audio.url);
     if (!blob) throw new Error("参考音频读取失败，请重新上传或使用公网音频 URL");
+    if (config.channelMode === "remote") return uploadReferenceMedia(new File([blob], audio.name || "reference-audio.mp3", { type: audio.type || blob.type || "audio/mpeg" }));
     return blobToDataUrl(blob, "读取参考音频失败");
 }
 
@@ -413,11 +418,11 @@ async function assertVideoBlob(blob: Blob) {
     if (payload.error?.message) throw new Error(payload.error.message);
 }
 
-async function buildGrokInputReferences(references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
+async function buildGrokInputReferences(config: AiConfig, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
     return [
-        ...(await Promise.all(references.slice(0, 7).map(resolveGrokImageUrl))),
-        ...(await Promise.all(videoReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.videos).map(resolveGrokVideoUrl))),
-        ...(await Promise.all(audioReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.audios).map(resolveGrokAudioUrl))),
+        ...(await Promise.all(references.slice(0, 7).map((image) => resolveGrokImageUrl(config, image)))),
+        ...(await Promise.all(videoReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.videos).map((video) => resolveGrokVideoUrl(config, video)))),
+        ...(await Promise.all(audioReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.audios).map((audio) => resolveGrokAudioUrl(config, audio)))),
     ];
 }
 
