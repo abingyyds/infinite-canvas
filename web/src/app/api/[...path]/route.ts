@@ -1,7 +1,13 @@
 import type { NextRequest } from "next/server";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import type { IncomingMessage, OutgoingHttpHeaders } from "node:http";
+import { Readable } from "node:stream";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 1200;
+
+const DEFAULT_PROXY_TIMEOUT_MS = 20 * 60 * 1000;
 
 type RouteContext = {
     params: Promise<{ path: string[] }>;
@@ -17,8 +23,26 @@ function proxyHeaders(request: NextRequest) {
     return headers;
 }
 
-function responseHeaders(response: Response) {
-    const headers = new Headers(response.headers);
+function proxyTimeoutMs() {
+    const value = Number(process.env.API_PROXY_TIMEOUT_MS);
+    return Number.isFinite(value) && value > 0 ? value : DEFAULT_PROXY_TIMEOUT_MS;
+}
+
+function nodeHeaders(headers: Headers): OutgoingHttpHeaders {
+    const result: OutgoingHttpHeaders = {};
+    headers.forEach((value, key) => {
+        result[key] = value;
+    });
+    return result;
+}
+
+function responseHeaders(response: IncomingMessage) {
+    const headers = new Headers();
+    for (const [key, value] of Object.entries(response.headers)) {
+        if (!value) continue;
+        if (Array.isArray(value)) value.forEach((item) => headers.append(key, item));
+        else headers.set(key, value);
+    }
     headers.delete("content-length");
     headers.delete("content-encoding");
     headers.delete("transfer-encoding");
@@ -32,23 +56,49 @@ async function proxy(request: NextRequest, context: RouteContext) {
     const hasBody = request.method !== "GET" && request.method !== "HEAD";
 
     try {
-        const response = await fetch(target, {
-            method: request.method,
-            headers: proxyHeaders(request),
-            body: hasBody ? request.body : undefined,
-            duplex: hasBody ? "half" : undefined,
-            redirect: "manual",
-        } as RequestInit & { duplex?: "half" });
-
-        return new Response(response.body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: responseHeaders(response),
-        });
+        return await proxyWithNodeHttp(target, request, hasBody);
     } catch (error) {
         console.error("Failed to proxy", target, error);
-        return Response.json({ code: 1, data: null, msg: "接口连接失败，请确认后端服务已启动" }, { status: 502 });
+        const message = error instanceof Error && error.message.includes("timeout") ? "接口等待超时，请稍后重试，或检查上游模型是否长时间未返回" : "接口连接失败，请确认后端服务已启动";
+        return Response.json({ code: 1, data: null, msg: message }, { status: 502 });
     }
+}
+
+function proxyWithNodeHttp(target: string, request: NextRequest, hasBody: boolean) {
+    const url = new URL(target);
+    const transport = url.protocol === "https:" ? httpsRequest : httpRequest;
+
+    return new Promise<Response>((resolve, reject) => {
+        const upstream = transport(
+            url,
+            {
+                method: request.method,
+                headers: nodeHeaders(proxyHeaders(request)),
+            },
+            (response) => {
+                resolve(
+                    new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, {
+                        status: response.statusCode || 502,
+                        statusText: response.statusMessage,
+                        headers: responseHeaders(response),
+                    }),
+                );
+            },
+        );
+
+        upstream.on("error", reject);
+        upstream.setTimeout(proxyTimeoutMs(), () => {
+            upstream.destroy(new Error(`API proxy timeout after ${proxyTimeoutMs()}ms`));
+        });
+
+        if (hasBody && request.body) {
+            const body = Readable.fromWeb(request.body as Parameters<typeof Readable.fromWeb>[0]);
+            body.on("error", (error) => upstream.destroy(error));
+            body.pipe(upstream);
+            return;
+        }
+        upstream.end();
+    });
 }
 
 export const GET = proxy;
