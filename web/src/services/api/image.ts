@@ -138,6 +138,7 @@ function parseImagePayload(payload: ImageApiResponse) {
 function readAxiosError(error: unknown, fallback: string) {
     if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
         const responseData = error.response?.data;
+        if (typeof responseData === "string" && responseData.trim()) return responseData;
         return responseData?.msg || responseData?.error?.message || readStatusError(error.response?.status, fallback);
     }
     return error instanceof Error ? error.message : fallback;
@@ -231,7 +232,6 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     formData.set("model", config.model);
     formData.set("prompt", withSystemPrompt(config, requestPrompt));
     formData.set("n", String(n));
-    formData.set("response_format", "b64_json");
     formData.set("output_format", IMAGE_OUTPUT_FORMAT);
     if (quality) {
         formData.set("quality", quality);
@@ -258,7 +258,11 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         refreshRemoteUser(config);
         return images;
     } catch (error) {
-        throw new Error(readAxiosError(error, "请求失败"));
+        const message = readAxiosError(error, "请求失败");
+        if (shouldRetryImageEditAsJson(message)) {
+            return requestEditJsonFallback(config, requestPrompt, n, quality, requestSize, normalizedReferences.map((image) => image.dataUrl), mask ? await normalizedMaskDataUrl(mask, normalizedReferences[0]) : undefined, message);
+        }
+        throw new Error(message);
     }
 }
 
@@ -266,6 +270,39 @@ function pngFileName(name: string | undefined, fallback: string) {
     const value = (name || fallback).trim();
     if (!value) return fallback;
     return value.replace(/\.[^.]+$/, "") + ".png";
+}
+
+async function normalizedMaskDataUrl(mask: ReferenceImage, reference?: { width: number; height: number }) {
+    return (await normalizeImageDataUrlForUpload(mask.dataUrl, reference ? { targetWidth: reference.width, targetHeight: reference.height } : undefined)).dataUrl;
+}
+
+async function requestEditJsonFallback(config: AiConfig, requestPrompt: string, n: number, quality: string | undefined, size: string | undefined, images: string[], mask: string | undefined, previousMessage: string) {
+    try {
+        const response = await axios.post<ImageApiResponse>(
+            aiApiUrl(config, "/images/edits"),
+            {
+                model: config.model,
+                prompt: withSystemPrompt(config, requestPrompt),
+                n,
+                images,
+                ...(mask ? { mask } : {}),
+                ...(quality ? { quality } : {}),
+                ...(size ? { size } : {}),
+                output_format: IMAGE_OUTPUT_FORMAT,
+                input_fidelity: "high",
+            },
+            { headers: aiHeaders(config, "application/json") },
+        );
+        const result = parseImagePayload(response.data);
+        refreshRemoteUser(config);
+        return result;
+    } catch (error) {
+        throw new Error(readAxiosError(error, previousMessage || "请求失败"));
+    }
+}
+
+function shouldRetryImageEditAsJson(message: string) {
+    return /image upload failed|check the image|invalid image|unsupported image|图片上传|图片格式/i.test(message);
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: ChatCompletionMessage[], onDelta: (text: string) => void) {
