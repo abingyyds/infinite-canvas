@@ -1,5 +1,9 @@
 import type { ReferenceImage } from "@/types/image";
 
+const DEFAULT_UPLOAD_MAX_EDGE = 2048;
+const DEFAULT_UPLOAD_MAX_BYTES = 15 * 1024 * 1024;
+const MIN_UPLOAD_EDGE = 512;
+
 export function formatBytes(bytes: number) {
     if (!Number.isFinite(bytes) || bytes <= 0) {
         return "";
@@ -50,6 +54,36 @@ export function readImageMeta(dataUrl: string) {
     });
 }
 
+export async function normalizeImageDataUrlForUpload(dataUrl: string, options: { maxEdge?: number; maxBytes?: number; targetWidth?: number; targetHeight?: number } = {}) {
+    const image = await loadImage(dataUrl);
+    const sourceWidth = image.naturalWidth || image.width || 1024;
+    const sourceHeight = image.naturalHeight || image.height || 1024;
+    const maxEdge = options.maxEdge || DEFAULT_UPLOAD_MAX_EDGE;
+    const maxBytes = options.maxBytes || DEFAULT_UPLOAD_MAX_BYTES;
+    let width = options.targetWidth || sourceWidth;
+    let height = options.targetHeight || sourceHeight;
+
+    if (!options.targetWidth || !options.targetHeight) {
+        const scale = Math.min(1, maxEdge / Math.max(sourceWidth, sourceHeight));
+        width = Math.max(1, Math.round(sourceWidth * scale));
+        height = Math.max(1, Math.round(sourceHeight * scale));
+    }
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        const normalized = drawImageToPngDataUrl(image, width, height);
+        const bytes = getDataUrlByteSize(normalized);
+        if (bytes <= maxBytes || options.targetWidth || Math.max(width, height) <= MIN_UPLOAD_EDGE) {
+            return { dataUrl: normalized, width, height, bytes, mimeType: "image/png" };
+        }
+        const scale = Math.max(0.5, Math.min(0.9, Math.sqrt(maxBytes / bytes) * 0.95));
+        width = Math.max(MIN_UPLOAD_EDGE, Math.round(width * scale));
+        height = Math.max(MIN_UPLOAD_EDGE, Math.round(height * scale));
+    }
+
+    const normalized = drawImageToPngDataUrl(image, width, height);
+    return { dataUrl: normalized, width, height, bytes: getDataUrlByteSize(normalized), mimeType: "image/png" };
+}
+
 export function dataUrlToFile(image: ReferenceImage) {
     const [header, content] = image.dataUrl.split(",", 2);
     const mimeType = header.match(/data:(.*?);base64/)?.[1] || image.type || "image/png";
@@ -59,4 +93,23 @@ export function dataUrlToFile(image: ReferenceImage) {
         bytes[index] = binary.charCodeAt(index);
     }
     return new File([bytes], image.name || "reference.png", { type: mimeType });
+}
+
+function loadImage(dataUrl: string) {
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("参考图读取失败，请重新上传图片"));
+        image.src = dataUrl;
+    });
+}
+
+function drawImageToPngDataUrl(image: HTMLImageElement, width: number, height: number) {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("参考图处理失败，请重新上传图片");
+    context.drawImage(image, 0, 0, width, height);
+    return canvas.toDataURL("image/png");
 }

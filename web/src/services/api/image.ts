@@ -3,7 +3,7 @@ import axios from "axios";
 import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
-import { dataUrlToFile } from "@/lib/image-utils";
+import { dataUrlToFile, normalizeImageDataUrlForUpload } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
@@ -243,9 +243,14 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (referenceDataUrls.some((dataUrl) => !dataUrl?.startsWith("data:image/"))) {
         throw new Error("参考图读取失败，请重新上传图片");
     }
-    const files = references.map((image, index) => dataUrlToFile({ ...image, dataUrl: referenceDataUrls[index] || "" }));
+    const normalizedReferences = await Promise.all(referenceDataUrls.map((dataUrl) => normalizeImageDataUrlForUpload(dataUrl || "")));
+    const files = references.map((image, index) => dataUrlToFile({ ...image, name: pngFileName(image.name, `reference-${index + 1}.png`), type: "image/png", dataUrl: normalizedReferences[index]?.dataUrl || "" }));
     files.forEach((file) => formData.append("image", file));
-    if (mask) formData.set("mask", dataUrlToFile(mask));
+    if (mask) {
+        const firstReference = normalizedReferences[0];
+        const normalizedMask = await normalizeImageDataUrlForUpload(mask.dataUrl, firstReference ? { targetWidth: firstReference.width, targetHeight: firstReference.height } : undefined);
+        formData.set("mask", dataUrlToFile({ ...mask, name: pngFileName(mask.name, "mask.png"), type: "image/png", dataUrl: normalizedMask.dataUrl }));
+    }
 
     try {
         const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, { headers: aiHeaders(config) });
@@ -255,6 +260,12 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     } catch (error) {
         throw new Error(readAxiosError(error, "请求失败"));
     }
+}
+
+function pngFileName(name: string | undefined, fallback: string) {
+    const value = (name || fallback).trim();
+    if (!value) return fallback;
+    return value.replace(/\.[^.]+$/, "") + ".png";
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: ChatCompletionMessage[], onDelta: (text: string) => void) {
