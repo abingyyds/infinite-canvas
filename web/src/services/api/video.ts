@@ -60,14 +60,15 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = []): Promise<VideoGenerationTask> {
     const model = (config.model || config.videoModel).trim();
+    const isGrokVideo = isGrokImagineVideoModel(model);
     assertVideoConfig(config, model);
     if (isSeedanceVideoConfig({ ...config, model })) {
         return createSeedanceTask(config, model, prompt, references, videoReferences, audioReferences);
     }
-    if (videoReferences.length || audioReferences.length) {
-        throw new Error("当前视频接口不支持参考视频或参考音频，请切换到 Seedance 2.0 / 火山 Agent Plan 模型，或移除参考素材");
+    if ((videoReferences.length || audioReferences.length) && !isGrokVideo) {
+        throw new Error("当前视频接口只支持参考图；参考视频或参考音频请切换到 Grok Imagine Video、Seedance 2.0 / 火山 Agent Plan 模型，或移除参考素材");
     }
-    return createOpenAIVideoTask(config, model, prompt, references);
+    return createOpenAIVideoTask(config, model, prompt, references, isGrokVideo ? videoReferences : [], isGrokVideo ? audioReferences : []);
 }
 
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask): Promise<VideoGenerationTaskState> {
@@ -81,7 +82,7 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
     throw new Error("视频接口没有返回可播放的视频");
 }
 
-async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[]): Promise<VideoGenerationTask> {
+async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
     const body = new FormData();
     body.append("model", model);
     body.append("prompt", prompt);
@@ -91,12 +92,41 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     body.append("preset", "normal");
     const files = await Promise.all(references.slice(0, 7).map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => body.append("input_reference[]", file));
+    const videoFiles = await Promise.all(videoReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.videos).map(referenceVideoToFile));
+    videoFiles.forEach((file) => body.append("input_reference[]", file));
+    const audioFiles = await Promise.all(audioReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.audios).map(referenceAudioToFile));
+    audioFiles.forEach((file) => body.append("input_reference[]", file));
     try {
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { headers: aiHeaders(config) })).data);
         if (!created.id) throw new Error("视频接口没有返回任务 ID");
         return { id: created.id, provider: "openai", model };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务创建失败"));
+    }
+}
+
+async function referenceVideoToFile(video: ReferenceVideo) {
+    const blob = await referenceMediaBlob(video.storageKey, video.url);
+    if (!blob) throw new Error("参考视频读取失败，请重新上传或使用公网视频 URL");
+    return new File([blob], video.name || "reference-video.mp4", { type: video.type || blob.type || "video/mp4" });
+}
+
+async function referenceAudioToFile(audio: ReferenceAudio) {
+    const blob = await referenceMediaBlob(audio.storageKey, audio.url);
+    if (!blob) throw new Error("参考音频读取失败，请重新上传或使用公网音频 URL");
+    return new File([blob], audio.name || "reference-audio.mp3", { type: audio.type || blob.type || "audio/mpeg" });
+}
+
+async function referenceMediaBlob(storageKey: string | undefined, url: string) {
+    if (storageKey) {
+        const stored = await getMediaBlob(storageKey);
+        if (stored) return stored;
+    }
+    if (!url || url.startsWith("asset://")) return null;
+    try {
+        return await (await fetch(url)).blob();
+    } catch {
+        return null;
     }
 }
 
@@ -277,6 +307,10 @@ function normalizeVideoResolution(value: string) {
     if (value === "auto" || value === "high" || value === "medium") return "720p";
     const resolution = value.replace(/p$/i, "") || "720";
     return `${resolution}p`;
+}
+
+function isGrokImagineVideoModel(model: string) {
+    return model.toLowerCase().includes("grok-imagine-video");
 }
 
 function unwrapVideoResponse(payload: ApiVideoResponse) {
