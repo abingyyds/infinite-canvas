@@ -744,8 +744,8 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
 function serializeLog(log: GenerationLog): GenerationLog {
     return {
         ...log,
-        references: log.references.map((item) => ({ ...item, dataUrl: item.storageKey ? "" : item.dataUrl })),
-        images: log.images.map((image) => ({ ...image, dataUrl: image.storageKey ? "" : image.dataUrl })),
+        references: log.references.map((item) => ({ ...item, dataUrl: item.dataUrl || "" })),
+        images: log.images.map((image) => ({ ...image, dataUrl: image.dataUrl || "" })),
         thumbnails: [],
     };
 }

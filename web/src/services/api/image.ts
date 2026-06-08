@@ -239,7 +239,11 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (requestSize) {
         formData.set("size", requestSize);
     }
-    const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
+    const referenceDataUrls = await Promise.all(references.map((image) => imageToDataUrl(image)));
+    if (referenceDataUrls.some((dataUrl) => !dataUrl?.startsWith("data:image/"))) {
+        throw new Error("参考图读取失败，请重新上传图片");
+    }
+    const files = references.map((image, index) => dataUrlToFile({ ...image, dataUrl: referenceDataUrls[index] || "" }));
     files.forEach((file) => formData.append("image", file));
     if (mask) formData.set("mask", dataUrlToFile(mask));
 

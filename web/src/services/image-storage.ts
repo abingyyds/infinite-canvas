@@ -51,7 +51,7 @@ export async function setImageBlob(storageKey: string, blob: Blob) {
 }
 
 export async function imageToDataUrl(image: { url?: string; dataUrl?: string; storageKey?: string }) {
-    const url = image.dataUrl || (await resolveImageUrl(image.storageKey, image.url || ""));
+    const url = await resolveImageUrl(image.storageKey, image.dataUrl || image.url || "");
     if (!url || url.startsWith("data:")) return url;
     return blobToDataUrl(await (await fetch(url)).blob());
 }

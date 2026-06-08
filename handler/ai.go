@@ -100,6 +100,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		Fail(w, "AI 接口请求失败")
 		return
 	}
+	request.ContentLength = int64(len(body))
 	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
