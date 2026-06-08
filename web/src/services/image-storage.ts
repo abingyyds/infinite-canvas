@@ -4,6 +4,7 @@ import localforage from "localforage";
 
 import { nanoid } from "nanoid";
 import { readImageMeta } from "@/lib/image-utils";
+import { currentUserScope } from "@/lib/user-scope";
 
 export type UploadedImage = {
     url: string;
@@ -19,7 +20,7 @@ const objectUrls = new Map<string, string>();
 
 export async function uploadImage(input: string | Blob): Promise<UploadedImage> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
-    const storageKey = `image:${nanoid()}`;
+    const storageKey = `${imageStoragePrefix()}${nanoid()}`;
     await store.setItem(storageKey, blob);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
@@ -68,9 +69,10 @@ export async function deleteStoredImages(keys: Iterable<string>) {
 
 export async function cleanupUnusedImages(usedData: unknown) {
     const usedKeys = collectImageStorageKeys(usedData);
+    const prefix = imageStoragePrefix();
     const unused: string[] = [];
     await store.iterate((_value, key) => {
-        if (!usedKeys.has(key)) unused.push(key);
+        if (key.startsWith(prefix) && !usedKeys.has(key)) unused.push(key);
     });
     await deleteStoredImages(unused);
 }
@@ -89,4 +91,8 @@ function blobToDataUrl(blob: Blob) {
         reader.onerror = () => reject(new Error("读取图片失败"));
         reader.readAsDataURL(blob);
     });
+}
+
+function imageStoragePrefix() {
+    return `image:${currentUserScope()}:`;
 }

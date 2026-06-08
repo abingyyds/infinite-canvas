@@ -23,6 +23,17 @@ type Config struct {
 	LinuxDoAuthorizeURL string `env:"LINUX_DO_AUTHORIZE_URL" envDefault:"https://connect.linux.do/oauth2/authorize"`
 	LinuxDoTokenURL     string `env:"LINUX_DO_TOKEN_URL" envDefault:"https://connect.linux.do/oauth2/token"`
 	LinuxDoUserInfoURL  string `env:"LINUX_DO_USERINFO_URL" envDefault:"https://connect.linux.do/api/user"`
+
+	GatewayBaseURL              string `env:"GATEWAY_BASE_URL"`
+	GatewayLoginSources         string `env:"GATEWAY_LOGIN_SOURCES"`
+	GatewayPublicBaseURL        string `env:"GATEWAY_PUBLIC_BASE_URL"`
+	GatewayFallbackBaseURL      string `env:"GATEWAY_FALLBACK_BASE_URL"`
+	GatewayBaseURLCandidates    string `env:"GATEWAY_BASE_URL_CANDIDATES"`
+	GatewaySubscribedModelsPath string `env:"GATEWAY_SUBSCRIBED_MODELS_PATH"`
+	GatewayKeyPrefix            string `env:"GATEWAY_KEY_PREFIX" envDefault:"canvas-auto"`
+	GatewayKeyGroup             string `env:"GATEWAY_KEY_GROUP"`
+	GatewayKeyGroupID           int    `env:"GATEWAY_KEY_GROUP_ID" envDefault:"0"`
+	GatewayAllowLoginFallback   bool   `env:"GATEWAY_ALLOW_LOGIN_FALLBACK" envDefault:"true"`
 }
 
 var Cfg Config

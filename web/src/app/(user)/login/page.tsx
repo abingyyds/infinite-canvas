@@ -2,7 +2,7 @@
 
 import { LockOutlined, UserOutlined } from "@ant-design/icons";
 import { App, Button, Form, Input, Segmented, Space } from "antd";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
 import { fetchCurrentUser } from "@/services/api/auth";
@@ -35,7 +35,6 @@ export default function LoginPage() {
 
 function LoginContent() {
     const { message } = App.useApp();
-    const router = useRouter();
     const searchParams = useSearchParams();
     const login = useUserStore((state) => state.login);
     const register = useUserStore((state) => state.register);
@@ -54,10 +53,9 @@ function LoginContent() {
         void fetchCurrentUser(token).then((user) => {
             setSession(token, user);
             message.success("登录成功");
-            router.replace(redirect);
-            router.refresh();
+            window.location.assign(redirect);
         });
-    }, [message, redirect, router, searchParams, setSession]);
+    }, [message, redirect, searchParams, setSession]);
 
     useEffect(() => {
         if (!allowRegister && mode === "register") setMode("login");
@@ -76,9 +74,7 @@ function LoginContent() {
             const action = mode === "register" ? register : login;
             const user = await action({ username: values.username, password: values.password });
             message.success(mode === "register" ? "注册成功" : "登录成功");
-            router.replace(redirect);
-            router.refresh();
-            if (user.role !== "admin") router.replace("/");
+            window.location.assign(user.role === "admin" ? redirect : "/");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "登录失败");
         }

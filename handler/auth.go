@@ -11,8 +11,10 @@ import (
 )
 
 type loginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string                `json:"username"`
+	Password string                `json:"password"`
+	Provider model.GatewayProvider `json:"provider"`
+	BaseURL  string                `json:"baseUrl"`
 }
 
 type registerRequest struct {
@@ -48,12 +50,63 @@ func Register(w http.ResponseWriter, r *http.Request) {
 func Login(w http.ResponseWriter, r *http.Request) {
 	var request loginRequest
 	_ = json.NewDecoder(r.Body).Decode(&request)
+	if request.Provider != "" || strings.TrimSpace(request.BaseURL) != "" {
+		session, err := service.LoginWithGateway(service.GatewayLoginRequest{
+			Provider: request.Provider,
+			BaseURL:  request.BaseURL,
+			Username: request.Username,
+			Password: request.Password,
+		})
+		if err != nil {
+			FailError(w, err)
+			return
+		}
+		OK(w, session)
+		return
+	}
 	session, err := service.Login(request.Username, request.Password)
 	if err != nil {
+		gatewaySession, ok, gatewayErr := service.LoginWithDefaultGateway(request.Username, request.Password)
+		if gatewayErr != nil {
+			FailError(w, gatewayErr)
+			return
+		}
+		if ok {
+			OK(w, gatewaySession)
+			return
+		}
 		FailError(w, err)
 		return
 	}
 	OK(w, session)
+}
+
+func GatewayStatus(w http.ResponseWriter, r *http.Request) {
+	user, ok := service.UserFromContext(r.Context())
+	if !ok {
+		Fail(w, "未登录或权限不足")
+		return
+	}
+	status, err := service.GatewayAccountStatus(user.ID)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, status)
+}
+
+func GatewayModels(w http.ResponseWriter, r *http.Request) {
+	user, ok := service.UserFromContext(r.Context())
+	if !ok {
+		Fail(w, "未登录或权限不足")
+		return
+	}
+	models, err := service.RefreshGatewayModels(user.ID)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, models)
 }
 
 func LinuxDoAuthorize(w http.ResponseWriter, r *http.Request) {

@@ -20,12 +20,12 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const isLoginPage = pathname === "/login" || pathname === "/admin/login";
 
     useEffect(() => {
-        void loadPublicSettings();
-    }, [loadPublicSettings]);
-
-    useEffect(() => {
-        if (!isLoginPage) void hydrateUser();
-    }, [hydrateUser, isLoginPage]);
+        if (isLoginPage) {
+            void loadPublicSettings();
+            return;
+        }
+        void hydrateUser().then(() => loadPublicSettings());
+    }, [hydrateUser, isLoginPage, loadPublicSettings]);
 
     useEffect(() => {
         if (handledConfigParams.current) return;

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/basketikun/infinite-canvas/model"
 	"github.com/basketikun/infinite-canvas/service"
 )
 
@@ -47,7 +48,8 @@ func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 	if strings.TrimSpace(modelName) == "" {
 		modelName = "grok-imagine-video"
 	}
-	channel, err := service.SelectModelChannel(modelName)
+	user, _ := service.UserFromContext(r.Context())
+	channel, _, err := selectAIChannel(user.ID, modelName)
 	if err != nil {
 		log.Printf("AI proxy select channel failed: model=%s err=%v", modelName, err)
 		Fail(w, "AI 接口请求失败")
@@ -75,19 +77,22 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		Fail(w, "未登录或权限不足")
 		return
 	}
+	channel, isGatewayChannel, err := selectAIChannel(user.ID, modelName)
+	if err != nil {
+		log.Printf("AI proxy select channel failed: model=%s err=%v", modelName, err)
+		Fail(w, "AI 接口请求失败")
+		return
+	}
 	credits, err := service.ModelCost(modelName)
 	if err != nil {
 		log.Printf("AI proxy read model cost failed: model=%s err=%v", modelName, err)
 		Fail(w, "AI 接口请求失败")
 		return
 	}
-	credits *= readAIRequestCount(body, contentType)
-	channel, err := service.SelectModelChannel(modelName)
-	if err != nil {
-		log.Printf("AI proxy select channel failed: model=%s err=%v", modelName, err)
-		Fail(w, "AI 接口请求失败")
-		return
+	if isGatewayChannel {
+		credits = 0
 	}
+	credits *= readAIRequestCount(body, contentType)
 	path = resolveAIProxyPath(channel.BaseURL, modelName, path)
 	request, err := http.NewRequest(http.MethodPost, service.BuildModelChannelURL(channel, path), bytes.NewReader(body))
 	if err != nil {
@@ -241,6 +246,18 @@ func aiStatusMessage(statusCode int) string {
 	default:
 		return "AI 接口请求失败"
 	}
+}
+
+func selectAIChannel(userID string, modelName string) (model.ModelChannel, bool, error) {
+	channel, ok, err := service.UserGatewayChannel(userID, modelName)
+	if err != nil {
+		return model.ModelChannel{}, false, err
+	}
+	if ok {
+		return channel, true, nil
+	}
+	selected, err := service.SelectModelChannel(modelName)
+	return selected, false, err
 }
 
 func aiUpstreamStatusMessage(statusCode int, body []byte) string {

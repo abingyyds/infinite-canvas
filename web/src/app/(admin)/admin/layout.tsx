@@ -26,7 +26,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     const token = useUserStore((state) => state.token);
     const user = useUserStore((state) => state.user);
     const isReady = useUserStore((state) => state.isReady);
-    const logout = useUserStore((state) => state.clearSession);
+    const clearSession = useUserStore((state) => state.clearSession);
     const activeKey = pathname.startsWith("/admin/settings")
         ? "/admin/settings"
         : pathname.startsWith("/admin/assets")
@@ -50,6 +50,10 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
             router.replace("/");
         }
     }, [isReady, router, token, user?.role]);
+    const logout = () => {
+        clearSession();
+        window.location.assign("/login");
+    };
 
     if (!isReady || !token || user?.role !== "admin") {
         return (

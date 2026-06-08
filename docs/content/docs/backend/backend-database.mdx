@@ -20,6 +20,7 @@ description: 当前后端主要数据表与字段说明
 当前启动时执行 `AutoMigrate`，自动维护以下表：
 
 - `users`
+- `gateway_accounts`
 - `credit_logs`
 - `prompts`
 - `assets`
@@ -50,6 +51,28 @@ description: 当前后端主要数据表与字段说明
 | `status` | string | 用户状态：`active`、`ban` |
 | `last_login_at` | string | 最近登录时间 |
 | `extra` | json | 扩展信息，第三方资料按平台命名空间保存，如 `linuxDo` |
+| `created_at` | string | 创建时间 |
+| `updated_at` | string | 更新时间 |
+
+### gateway_accounts
+
+用户账号网关绑定表。每条记录属于一个本地用户，用于保存该用户在上游网关中的账号标识、会话、自动创建或复用的访问密钥，以及该用户可使用的模型列表。AI 代理命中该用户绑定后，会优先使用该用户自己的网关密钥发起请求。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 主键 |
+| `user_id` | string | 关联本地用户 ID，索引 |
+| `provider` | string | 网关接口类型：`main`、`site` |
+| `base_url` | string | 登录和密钥管理使用的网关地址 |
+| `external_user_id` | string | 上游账号 ID，索引 |
+| `username` | string | 上游用户名 |
+| `email` | string | 上游邮箱 |
+| `display_name` | string | 上游昵称 |
+| `session_cookie` | text | 上游登录会话，仅后端使用 |
+| `api_key` | text | 为当前用户创建或复用的访问密钥，仅后端使用 |
+| `api_key_id` | string | 上游密钥 ID |
+| `models` | text | 当前用户可用模型列表 JSON |
+| `models_source` | string | 模型列表来源 |
 | `created_at` | string | 创建时间 |
 | `updated_at` | string | 更新时间 |
 

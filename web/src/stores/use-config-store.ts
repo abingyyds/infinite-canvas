@@ -6,6 +6,7 @@ import { persist } from "zustand/middleware";
 
 import { apiGet } from "@/services/api/request";
 import type { AdminPublicSettings } from "@/services/api/admin";
+import { useUserStore } from "@/stores/use-user-store";
 
 export type AiConfig = {
     channelMode: "remote" | "local";
@@ -211,7 +212,7 @@ export const useConfigStore = create<ConfigStore>()(
                 if (get().isPublicSettingsLoading) return;
                 set({ isPublicSettingsLoading: true });
                 try {
-                    set({ publicSettings: await apiGet<AdminPublicSettings>("/api/settings") });
+                    set({ publicSettings: await apiGet<AdminPublicSettings>("/api/settings", undefined, useUserStore.getState().token) });
                 } finally {
                     set({ isPublicSettingsLoading: false });
                 }

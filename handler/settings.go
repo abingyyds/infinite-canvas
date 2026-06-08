@@ -15,7 +15,8 @@ type adminChannelActionRequest struct {
 }
 
 func Settings(w http.ResponseWriter, r *http.Request) {
-	settings, err := service.PublicSettings()
+	user, _ := service.UserFromContext(r.Context())
+	settings, err := service.PublicSettingsWithGateway(user)
 	if err != nil {
 		FailError(w, err)
 		return

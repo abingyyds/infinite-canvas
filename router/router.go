@@ -21,7 +21,7 @@ func New() *gin.Engine {
 	api.GET("/auth/linux-do/authorize", gin.WrapF(handler.LinuxDoAuthorize))
 	api.GET("/auth/linux-do/callback", gin.WrapF(handler.LinuxDoCallback))
 	api.GET("/auth/me", middleware.OptionalAuth, gin.WrapF(handler.CurrentUser))
-	api.GET("/settings", gin.WrapF(handler.Settings))
+	api.GET("/settings", middleware.OptionalAuth, gin.WrapF(handler.Settings))
 	api.GET("/media/references/:id", func(c *gin.Context) {
 		handler.ReferenceMedia(c.Writer, c.Request, c.Param("id"))
 	})
@@ -44,6 +44,8 @@ func New() *gin.Engine {
 	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
 	api.GET("/assets", middleware.OptionalAuth, gin.WrapF(handler.Assets))
 	api.POST("/admin/login", gin.WrapF(handler.AdminLogin))
+	api.GET("/gateway/status", middleware.UserAuth, gin.WrapF(handler.GatewayStatus))
+	api.POST("/gateway/models", middleware.UserAuth, gin.WrapF(handler.GatewayModels))
 
 	admin := api.Group("/admin", middleware.AdminAuth)
 	admin.GET("/users", gin.WrapF(handler.AdminUsers))
