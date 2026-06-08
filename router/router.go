@@ -34,6 +34,8 @@ func New() *gin.Engine {
 	v1.POST("/chat/completions", gin.WrapF(handler.AIChatCompletions))
 	v1.POST("/audio/speech", gin.WrapF(handler.AIAudioSpeech))
 	v1.POST("/videos", gin.WrapF(handler.AIVideos))
+	v1.POST("/videos/generations", gin.WrapF(handler.AIVideosGenerations))
+	v1.POST("/videos/edits", gin.WrapF(handler.AIVideosEdits))
 	v1.POST("/media/references", gin.WrapF(handler.UploadReferenceMedia))
 	v1.GET("/videos/:id", func(c *gin.Context) {
 		handler.AIVideo(c.Writer, c.Request, c.Param("id"))

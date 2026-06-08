@@ -35,6 +35,14 @@ func AIVideos(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/videos")
 }
 
+func AIVideosGenerations(w http.ResponseWriter, r *http.Request) {
+	proxyAIRequest(w, r, "/videos/generations")
+}
+
+func AIVideosEdits(w http.ResponseWriter, r *http.Request) {
+	proxyAIRequest(w, r, "/videos/edits")
+}
+
 func AIVideo(w http.ResponseWriter, r *http.Request, id string) {
 	proxyAIGetRequest(w, r, "/videos/"+id)
 }
