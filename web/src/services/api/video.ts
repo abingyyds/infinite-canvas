@@ -84,26 +84,20 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
 }
 
 async function createGrokVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
-    if (audioReferences.length) throw new Error("Grok Imagine Video 当前接口不支持参考音频，请移除音频或切换 Seedance 2.0");
-    if (videoReferences.length > 1) throw new Error("Grok Imagine Video 视频编辑一次只能使用 1 个参考视频");
-    if (videoReferences.length && references.length) throw new Error("Grok Imagine Video 不能同时使用参考图和参考视频，请只保留一种参考素材");
-
-    const payload: Record<string, unknown> = { model, prompt: buildGrokVideoPromptText(prompt, references) };
-    let path = "/videos/generations";
-    if (videoReferences.length) {
-        if (videoReferences[0].durationMs && videoReferences[0].durationMs > 8700) throw new Error("Grok Imagine Video 参考视频最长支持 8.7 秒，请裁剪后再上传");
-        payload.video = { url: await resolveGrokVideoUrl(videoReferences[0]) };
-        path = "/videos/edits";
-    } else {
-        const aspectRatio = normalizeGrokAspectRatio(config.size);
-        payload.duration = normalizeGrokDuration(config.videoSeconds, references.length > 0);
-        payload.resolution = normalizeGrokResolution(config.vquality);
-        if (aspectRatio) payload.aspect_ratio = aspectRatio;
-        if (references.length) payload.reference_images = await Promise.all(references.slice(0, 7).map(async (image) => ({ url: await resolveGrokImageUrl(image) })));
-    }
+    const inputReference = await buildGrokInputReferences(references, videoReferences, audioReferences);
+    const size = normalizeVideoSize(config.size);
+    const payload = {
+        model,
+        prompt: buildGrokVideoPromptText(prompt, references),
+        seconds: normalizeVideoSeconds(config.videoSeconds),
+        resolution_name: normalizeVideoResolution(config.vquality),
+        preset: "normal",
+        ...(size ? { size } : {}),
+        ...(inputReference.length ? { input_reference: inputReference } : {}),
+    };
 
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), payload, { headers: aiHeaders(config, "application/json") })).data);
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), payload, { headers: aiHeaders(config, "application/json") })).data);
         const id = created.request_id || created.id;
         if (!id) throw new Error("视频接口没有返回任务 ID");
         return { id, provider: "openai", model };
@@ -161,17 +155,23 @@ async function referenceMediaBlob(storageKey: string | undefined, url: string) {
 }
 
 async function resolveGrokImageUrl(image: ReferenceImage) {
-    if (isPublicMediaUrl(image.url || "")) return image.url!;
     const dataUrl = await imageToDataUrl(image);
-    if (!dataUrl) throw new Error("参考图读取失败，请换一张图片或重新上传");
+    if (!dataUrl?.startsWith("data:image/")) throw new Error("参考图读取失败，请换一张图片或重新上传");
     return dataUrl;
 }
 
 async function resolveGrokVideoUrl(video: ReferenceVideo) {
-    if (isPublicMediaUrl(video.url) || video.url.startsWith("data:")) return video.url;
+    if (video.url.startsWith("data:")) return video.url;
     const blob = await referenceMediaBlob(video.storageKey, video.url);
     if (!blob) throw new Error("参考视频读取失败，请重新上传或使用公网视频 URL");
     return blobToDataUrl(blob);
+}
+
+async function resolveGrokAudioUrl(audio: ReferenceAudio) {
+    if (audio.url.startsWith("data:")) return audio.url;
+    const blob = await referenceMediaBlob(audio.storageKey, audio.url);
+    if (!blob) throw new Error("参考音频读取失败，请重新上传或使用公网音频 URL");
+    return blobToDataUrl(blob, "读取参考音频失败");
 }
 
 async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask): Promise<VideoGenerationTaskState> {
@@ -365,36 +365,6 @@ function buildGrokVideoPromptText(prompt: string, references: ReferenceImage[]) 
     return `参考图片编号：${labels}。\n\n${text}`;
 }
 
-function normalizeGrokDuration(value: string, hasReferenceImages: boolean) {
-    const seconds = Math.floor(Number(value) || 6);
-    return Math.max(1, Math.min(hasReferenceImages ? 10 : 15, seconds));
-}
-
-function normalizeGrokResolution(value: string) {
-    return normalizeVideoResolution(value) === "480p" ? "480p" : "720p";
-}
-
-function normalizeGrokAspectRatio(value: string) {
-    if (!value || value === "auto") return undefined;
-    const allowed = [
-        ["16:9", 16 / 9],
-        ["9:16", 9 / 16],
-        ["1:1", 1],
-        ["4:3", 4 / 3],
-        ["3:4", 3 / 4],
-        ["3:2", 3 / 2],
-        ["2:3", 2 / 3],
-    ] as const;
-    if (allowed.some(([ratio]) => ratio === value)) return value;
-    const match = value.match(/^(\d+)x(\d+)$/);
-    if (!match) return "16:9";
-    const width = Number(match[1]);
-    const height = Number(match[2]);
-    if (!width || !height) return "16:9";
-    const ratio = width / height;
-    return allowed.reduce((best, item) => (Math.abs(item[1] - ratio) < Math.abs(best[1] - ratio) ? item : best), allowed[0])[0];
-}
-
 function isGrokImagineVideoModel(model: string) {
     return model.toLowerCase().includes("grok-imagine-video");
 }
@@ -443,11 +413,19 @@ async function assertVideoBlob(blob: Blob) {
     if (payload.error?.message) throw new Error(payload.error.message);
 }
 
-function blobToDataUrl(blob: Blob) {
+async function buildGrokInputReferences(references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
+    return [
+        ...(await Promise.all(references.slice(0, 7).map(resolveGrokImageUrl))),
+        ...(await Promise.all(videoReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.videos).map(resolveGrokVideoUrl))),
+        ...(await Promise.all(audioReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.audios).map(resolveGrokAudioUrl))),
+    ];
+}
+
+function blobToDataUrl(blob: Blob, errorMessage = "读取参考视频失败") {
     return new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = () => reject(new Error("读取参考视频失败"));
+        reader.onerror = () => reject(new Error(errorMessage));
         reader.readAsDataURL(blob);
     });
 }

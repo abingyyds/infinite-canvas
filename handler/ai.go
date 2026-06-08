@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
+	"net/url"
 	"strings"
 
 	"github.com/basketikun/infinite-canvas/model"
@@ -33,14 +36,6 @@ func AIAudioSpeech(w http.ResponseWriter, r *http.Request) {
 
 func AIVideos(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/videos")
-}
-
-func AIVideosGenerations(w http.ResponseWriter, r *http.Request) {
-	proxyAIRequest(w, r, "/videos/generations")
-}
-
-func AIVideosEdits(w http.ResponseWriter, r *http.Request) {
-	proxyAIRequest(w, r, "/videos/edits")
 }
 
 func AIVideo(w http.ResponseWriter, r *http.Request, id string) {
@@ -102,6 +97,12 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	}
 	credits *= readAIRequestCount(body, contentType)
 	path = resolveAIProxyPath(channel.BaseURL, modelName, path)
+	body, contentType, err = prepareAIProxyBody(path, body, contentType)
+	if err != nil {
+		log.Printf("AI proxy prepare body failed: path=%s err=%v", path, err)
+		Fail(w, "AI 接口请求失败")
+		return
+	}
 	request, err := http.NewRequest(http.MethodPost, service.BuildModelChannelURL(channel, path), bytes.NewReader(body))
 	if err != nil {
 		log.Printf("AI proxy build request failed: url=%s err=%v", service.BuildModelChannelURL(channel, path), err)
@@ -178,6 +179,105 @@ func readAIRequest(r *http.Request) ([]byte, string, string, error) {
 		return nil, "", "", errMissingModel
 	}
 	return body, contentType, modelName, nil
+}
+
+func prepareAIProxyBody(path string, body []byte, contentType string) ([]byte, string, error) {
+	if path != "/videos" || !strings.HasPrefix(contentType, "application/json") {
+		return body, contentType, nil
+	}
+	var payload struct {
+		Model          string   `json:"model"`
+		Prompt         string   `json:"prompt"`
+		Seconds        string   `json:"seconds"`
+		Size           string   `json:"size"`
+		ResolutionName string   `json:"resolution_name"`
+		Preset         string   `json:"preset"`
+		InputReference []string `json:"input_reference"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, "", err
+	}
+	var buffer bytes.Buffer
+	writer := multipart.NewWriter(&buffer)
+	writeMultipartField(writer, "model", payload.Model)
+	writeMultipartField(writer, "prompt", payload.Prompt)
+	writeMultipartField(writer, "seconds", payload.Seconds)
+	writeMultipartField(writer, "size", payload.Size)
+	writeMultipartField(writer, "resolution_name", payload.ResolutionName)
+	writeMultipartField(writer, "preset", payload.Preset)
+	for index, reference := range payload.InputReference {
+		if err := writeMultipartDataURL(writer, "input_reference[]", reference, fmt.Sprintf("reference-%d", index+1)); err != nil {
+			return nil, "", err
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return buffer.Bytes(), writer.FormDataContentType(), nil
+}
+
+func writeMultipartField(writer *multipart.Writer, key string, value string) {
+	if strings.TrimSpace(value) != "" {
+		_ = writer.WriteField(key, value)
+	}
+}
+
+func writeMultipartDataURL(writer *multipart.Writer, field string, dataURL string, fallbackName string) error {
+	mimeType, data, err := decodeDataURL(dataURL)
+	if err != nil {
+		return err
+	}
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, escapeMultipartQuote(field), escapeMultipartQuote(fallbackName+dataURLExt(mimeType))))
+	header.Set("Content-Type", mimeType)
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return err
+	}
+	_, err = part.Write(data)
+	return err
+}
+
+func decodeDataURL(dataURL string) (string, []byte, error) {
+	header, content, ok := strings.Cut(dataURL, ",")
+	if !ok || !strings.HasPrefix(header, "data:") {
+		return "", nil, fmt.Errorf("invalid data url")
+	}
+	mimeType := strings.TrimPrefix(strings.Split(strings.TrimPrefix(header, "data:"), ";")[0], " ")
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	if strings.Contains(header, ";base64") {
+		data, err := base64.StdEncoding.DecodeString(content)
+		return mimeType, data, err
+	}
+	text, err := url.PathUnescape(content)
+	return mimeType, []byte(text), err
+}
+
+func dataURLExt(mimeType string) string {
+	switch strings.ToLower(mimeType) {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "video/mp4":
+		return ".mp4"
+	case "video/quicktime":
+		return ".mov"
+	case "audio/mpeg":
+		return ".mp3"
+	case "audio/wav", "audio/x-wav":
+		return ".wav"
+	default:
+		return ""
+	}
+}
+
+func escapeMultipartQuote(value string) string {
+	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"").Replace(value)
 }
 
 func readMultipartModel(body []byte, contentType string) string {
