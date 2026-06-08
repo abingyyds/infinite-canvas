@@ -240,7 +240,7 @@ func ListUsers(q model.Query) (model.UserList, error) {
 		users[i].Password = ""
 		normalizeUserDefaults(&users[i])
 	}
-	return model.UserList{Items: users, Total: int(total)}, nil
+	return model.UserList{Items: users, Total: int(total), AllowRoleManagement: config.Cfg.AdminAllowRoleManagement}, nil
 }
 
 func SaveUser(user model.User, password string) (model.User, error) {
@@ -250,9 +250,6 @@ func SaveUser(user model.User, password string) (model.User, error) {
 	}
 	if user.Username == "" {
 		return user, safeMessageError{message: "用户名不能为空"}
-	}
-	if user.Role == "" || user.Role == model.UserRoleGuest {
-		user.Role = model.UserRoleUser
 	}
 	if user.Status == "" {
 		user.Status = model.UserStatusActive
@@ -264,12 +261,26 @@ func SaveUser(user model.User, password string) (model.User, error) {
 	}
 	isCreate := user.ID == ""
 	if isCreate {
+		if user.Role == "" || user.Role == model.UserRoleGuest {
+			user.Role = model.UserRoleUser
+		}
+		if err := validateAdminRoleChange(model.User{}, user, true); err != nil {
+			return user, err
+		}
 		user.ID = newID("user")
 		user.AffCode = newAffCode()
 		user.CreatedAt = now()
 	} else if saved, ok, err := repository.GetUserByID(user.ID); err != nil {
 		return user, err
+	} else if !ok {
+		return user, safeMessageError{message: "用户不存在"}
 	} else if ok {
+		if user.Role == "" || user.Role == model.UserRoleGuest {
+			user.Role = saved.Role
+		}
+		if err := validateAdminRoleChange(saved, user, false); err != nil {
+			return user, err
+		}
 		user.CreatedAt = saved.CreatedAt
 		user.Password = saved.Password
 		user.AvatarURL = saved.AvatarURL
@@ -400,7 +411,36 @@ func DeleteCreditLog(id string) error {
 }
 
 func DeleteUser(id string) error {
+	user, ok, err := repository.GetUserByID(id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return safeMessageError{message: "用户不存在"}
+	}
+	if !config.Cfg.AdminAllowRoleManagement && user.Role == model.UserRoleAdmin {
+		return safeMessageError{message: "当前部署不允许删除管理员账号"}
+	}
 	return repository.DeleteUser(id)
+}
+
+func validateAdminRoleChange(saved model.User, next model.User, isCreate bool) error {
+	if config.Cfg.AdminAllowRoleManagement {
+		return nil
+	}
+	if isCreate && next.Role == model.UserRoleAdmin {
+		return safeMessageError{message: "当前部署不允许新增管理员账号"}
+	}
+	if !isCreate && saved.Role != model.UserRoleAdmin && next.Role == model.UserRoleAdmin {
+		return safeMessageError{message: "当前部署不允许将用户设为管理员"}
+	}
+	if !isCreate && saved.Role == model.UserRoleAdmin && next.Role != model.UserRoleAdmin {
+		return safeMessageError{message: "当前部署不允许变更管理员角色"}
+	}
+	if !isCreate && saved.Role == model.UserRoleAdmin && next.Status == model.UserStatusBan {
+		return safeMessageError{message: "当前部署不允许禁用管理员账号"}
+	}
+	return nil
 }
 
 func GuestUser() model.AuthUser {

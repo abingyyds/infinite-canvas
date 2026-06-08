@@ -22,11 +22,12 @@ const statusOptions = [
 ];
 
 export default function AdminUsersPage() {
-    const { users, keyword, page, pageSize, total, isLoading, searchUsers, changePage, changePageSize, resetFilters, refreshUsers, saveUser: saveAdminUser, adjustCredits, deleteUser } = useAdminUsers();
+    const { users, allowRoleManagement, keyword, page, pageSize, total, isLoading, searchUsers, changePage, changePageSize, resetFilters, refreshUsers, saveUser: saveAdminUser, adjustCredits, deleteUser } = useAdminUsers();
     const [form] = Form.useForm<UserFormValues>();
     const [keywordText, setKeywordText] = useState(keyword);
     const [editingUser, setEditingUser] = useState<Partial<AdminUser> | null>(null);
     const [deletingUser, setDeletingUser] = useState<AdminUser | null>(null);
+    const protectedAdminEditing = !allowRoleManagement && editingUser?.role === "admin";
 
     useEffect(() => setKeywordText(keyword), [keyword]);
 
@@ -101,16 +102,19 @@ export default function AdminUsersPage() {
             key: "actions",
             width: 96,
             align: "right",
-            render: (_, item) => (
-                <Space size={4}>
-                    <Tooltip title="编辑">
-                        <Button type="text" size="small" icon={<EditOutlined />} onClick={() => setEditingUser(item)} />
-                    </Tooltip>
-                    <Tooltip title="删除">
-                        <Button danger type="text" size="small" icon={<DeleteOutlined />} onClick={() => setDeletingUser(item)} />
-                    </Tooltip>
-                </Space>
-            ),
+            render: (_, item) => {
+                const protectedAdmin = !allowRoleManagement && item.role === "admin";
+                return (
+                    <Space size={4}>
+                        <Tooltip title="编辑">
+                            <Button type="text" size="small" icon={<EditOutlined />} onClick={() => setEditingUser(item)} />
+                        </Tooltip>
+                        <Tooltip title={protectedAdmin ? "管理员账号已锁定" : "删除"}>
+                            <Button danger type="text" size="small" icon={<DeleteOutlined />} disabled={protectedAdmin} onClick={() => setDeletingUser(item)} />
+                        </Tooltip>
+                    </Space>
+                );
+            },
         },
     ];
 
@@ -210,13 +214,13 @@ export default function AdminUsersPage() {
                             </Form.Item>
                         </Col>
                         <Col span={12}>
-                            <Form.Item name="role" label="角色" rules={[{ required: true, message: "请选择角色" }]}>
-                                <Select options={roleOptions} />
+                            <Form.Item name="role" label="角色" extra={allowRoleManagement ? undefined : "角色管理已锁定，默认只能新增和维护普通用户。"} rules={[{ required: true, message: "请选择角色" }]}>
+                                <Select options={roleOptions} disabled={!allowRoleManagement} />
                             </Form.Item>
                         </Col>
                         <Col span={12}>
                             <Form.Item name="status" label="状态" rules={[{ required: true, message: "请选择状态" }]}>
-                                <Select options={statusOptions} />
+                                <Select options={statusOptions} disabled={protectedAdminEditing} />
                             </Form.Item>
                         </Col>
                     </Row>
@@ -251,7 +255,7 @@ export default function AdminUsersPage() {
                     setDeletingUser(null);
                 }}
                 okText="删除"
-                okButtonProps={{ danger: true }}
+                okButtonProps={{ danger: true, disabled: !allowRoleManagement && deletingUser?.role === "admin" }}
                 cancelText="取消"
             >
                 确定删除「{deletingUser?.displayName || deletingUser?.username}」吗？删除后该账号将无法继续登录。

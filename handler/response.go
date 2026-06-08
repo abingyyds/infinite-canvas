@@ -16,11 +16,15 @@ type response struct {
 }
 
 func OK(w http.ResponseWriter, data any) {
-	writeJSON(w, response{Code: 0, Data: data, Msg: "ok"})
+	writeJSONStatus(w, http.StatusOK, response{Code: 0, Data: data, Msg: "ok"})
 }
 
 func Fail(w http.ResponseWriter, msg string) {
-	writeJSON(w, response{Code: 1, Data: nil, Msg: msg})
+	FailStatus(w, http.StatusOK, msg)
+}
+
+func FailStatus(w http.ResponseWriter, status int, msg string) {
+	writeJSONStatus(w, status, response{Code: 1, Data: nil, Msg: msg})
 }
 
 func FailError(w http.ResponseWriter, err error) {
@@ -32,8 +36,9 @@ func FailError(w http.ResponseWriter, err error) {
 	Fail(w, "操作失败")
 }
 
-func writeJSON(w http.ResponseWriter, value any) {
+func writeJSONStatus(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
 

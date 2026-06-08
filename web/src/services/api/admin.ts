@@ -31,6 +31,7 @@ export type AdminUser = {
 export type AdminUserListResponse = {
     items: AdminUser[];
     total: number;
+    allowRoleManagement: boolean;
 };
 
 export type AdminCreditLog = {

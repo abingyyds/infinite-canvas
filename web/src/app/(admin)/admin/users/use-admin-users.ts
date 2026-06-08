@@ -72,6 +72,7 @@ export function useAdminUsers() {
 
     return {
         users: data?.items || [],
+        allowRoleManagement: data?.allowRoleManagement === true,
         keyword,
         page,
         pageSize,

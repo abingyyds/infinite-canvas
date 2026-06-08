@@ -40,8 +40,9 @@ type User struct {
 
 // UserList 用户分页结果。
 type UserList struct {
-	Items []User `json:"items"`
-	Total int    `json:"total"`
+	Items               []User `json:"items"`
+	Total               int    `json:"total"`
+	AllowRoleManagement bool   `json:"allowRoleManagement"`
 }
 
 // AuthUser 用户公开信息。
