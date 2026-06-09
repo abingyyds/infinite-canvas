@@ -9,6 +9,7 @@ import { useEffect } from "react";
 
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { adminLayoutStyle } from "@/lib/app-theme";
+import { stopUserDataSync } from "@/services/user-data-sync";
 import { useUserStore } from "@/stores/use-user-store";
 
 const adminMenus = [
@@ -51,6 +52,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         }
     }, [isReady, router, token, user?.role]);
     const logout = () => {
+        stopUserDataSync();
         clearSession();
         window.location.assign("/login");
     };

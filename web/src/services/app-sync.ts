@@ -110,17 +110,17 @@ export async function syncAppDataToWebdav(config: WebdavSyncConfig, onProgress?:
             key: "image-workbench",
             label: "生图工作台",
             emptyData: { logs: [] },
-            localData: async () => ({ logs: await readStoredLogs(imageLogStore, IMAGE_LOG_STORE_KEY) }),
+            localData: async () => ({ logs: await readScopedStoredLogs(imageLogStore, IMAGE_LOG_STORE_KEY) }),
             mergeData: (local, remote) => ({ logs: mergeById(local.logs, remote.logs, "createdAt") }),
-            applyData: async (data) => replaceStoredLogs(imageLogStore, IMAGE_LOG_STORE_KEY, data.logs),
+            applyData: async (data) => replaceScopedStoredLogs(imageLogStore, IMAGE_LOG_STORE_KEY, data.logs),
         }),
         syncDomain<LogDomainData>(config, onProgress, {
             key: "video-workbench",
             label: "视频创作台",
             emptyData: { logs: [] },
-            localData: async () => ({ logs: await readStoredLogs(videoLogStore, VIDEO_LOG_STORE_KEY) }),
+            localData: async () => ({ logs: await readScopedStoredLogs(videoLogStore, VIDEO_LOG_STORE_KEY) }),
             mergeData: (local, remote) => ({ logs: mergeById(local.logs, remote.logs, "createdAt") }),
-            applyData: async (data) => replaceStoredLogs(videoLogStore, VIDEO_LOG_STORE_KEY, data.logs),
+            applyData: async (data) => replaceScopedStoredLogs(videoLogStore, VIDEO_LOG_STORE_KEY, data.logs),
         }),
     ]);
 
@@ -280,7 +280,7 @@ async function hydrateAsset(asset: Asset): Promise<Asset> {
     return asset;
 }
 
-async function readStoredLogs(store: LogStore, baseKey: string) {
+export async function readScopedStoredLogs(store: LogStore, baseKey: string) {
     const logs: StoredLog[] = [];
     const prefix = `${scopedStoreKey(baseKey)}:`;
     await store.iterate<StoredLog, void>((value, key) => {
@@ -289,7 +289,7 @@ async function readStoredLogs(store: LogStore, baseKey: string) {
     return logs;
 }
 
-async function replaceStoredLogs(store: LogStore, baseKey: string, logs: StoredLog[]) {
+export async function replaceScopedStoredLogs(store: LogStore, baseKey: string, logs: StoredLog[]) {
     const prefix = `${scopedStoreKey(baseKey)}:`;
     const existing: string[] = [];
     await store.iterate<StoredLog, void>((_value, key) => {

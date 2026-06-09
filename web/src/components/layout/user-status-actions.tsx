@@ -13,6 +13,7 @@ import { CreditSymbol } from "@/constant/credits";
 import { DOCS_URL } from "@/constant/env";
 import { cn } from "@/lib/utils";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { stopUserDataSync } from "@/services/user-data-sync";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -45,6 +46,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
     const gitHubStyle = iconStyle;
     const avatarStyle: CSSProperties | undefined = variant === "canvas" ? { borderColor: canvasTheme.toolbar.border, color: canvasTheme.node.text, background: "transparent" } : undefined;
     const logout = () => {
+        stopUserDataSync();
         clearSession();
         window.location.assign("/login");
     };

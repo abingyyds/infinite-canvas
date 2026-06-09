@@ -112,6 +112,8 @@ export default function VideoPage() {
 
     useEffect(() => {
         void refreshLogs();
+        window.addEventListener("infinite-canvas:video-logs-hydrated", refreshLogs);
+        return () => window.removeEventListener("infinite-canvas:video-logs-hydrated", refreshLogs);
     }, []);
 
     const addReferences = async (files?: FileList | null) => {
@@ -265,7 +267,9 @@ export default function VideoPage() {
             .filter((log) => selectedLogIds.includes(log.id))
             .map((log) => log.video?.storageKey)
             .filter((key): key is string => Boolean(key));
-        void Promise.all([deleteStoredMedia(mediaKeys), ...selectedLogIds.map((id) => logStore.removeItem(scopedLogKey(id)))]).then(refreshLogs);
+        void Promise.all([deleteStoredMedia(mediaKeys), ...selectedLogIds.map((id) => logStore.removeItem(scopedLogKey(id)))])
+            .then(refreshLogs)
+            .then(() => window.dispatchEvent(new Event("infinite-canvas:video-logs-changed")));
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResults([]);
@@ -277,6 +281,7 @@ export default function VideoPage() {
     const saveLog = async (log: GenerationLog) => {
         await logStore.setItem(scopedLogKey(log.id), serializeLog(log));
         await refreshLogs();
+        window.dispatchEvent(new Event("infinite-canvas:video-logs-changed"));
     };
 
     const refreshLogs = async () => {

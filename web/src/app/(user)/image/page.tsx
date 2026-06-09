@@ -108,6 +108,8 @@ export default function ImagePage() {
 
     useEffect(() => {
         void refreshLogs();
+        window.addEventListener("infinite-canvas:image-logs-hydrated", refreshLogs);
+        return () => window.removeEventListener("infinite-canvas:image-logs-hydrated", refreshLogs);
     }, []);
 
     const addReferences = async (files?: FileList | null) => {
@@ -246,7 +248,9 @@ export default function ImagePage() {
 
     const deleteSelectedLogs = () => {
         const imageKeys = logs.filter((log) => selectedLogIds.includes(log.id)).flatMap((log) => log.images.map((image) => image.storageKey).filter((key): key is string => Boolean(key)));
-        void Promise.all([deleteStoredImages(imageKeys), ...selectedLogIds.map((id) => logStore.removeItem(scopedLogKey(id)))]).then(refreshLogs);
+        void Promise.all([deleteStoredImages(imageKeys), ...selectedLogIds.map((id) => logStore.removeItem(scopedLogKey(id)))])
+            .then(refreshLogs)
+            .then(() => window.dispatchEvent(new Event("infinite-canvas:image-logs-changed")));
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResults([]);
@@ -256,7 +260,10 @@ export default function ImagePage() {
     };
 
     const saveLog = (log: GenerationLog) => {
-        void logStore.setItem(scopedLogKey(log.id), serializeLog(log)).then(refreshLogs);
+        void logStore
+            .setItem(scopedLogKey(log.id), serializeLog(log))
+            .then(refreshLogs)
+            .then(() => window.dispatchEvent(new Event("infinite-canvas:image-logs-changed")));
     };
 
     const refreshLogs = async () => setLogs(await readStoredLogs());

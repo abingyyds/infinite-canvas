@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { App } from "antd";
 
+import { startUserDataSync, stopUserDataSync } from "@/services/user-data-sync";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -13,6 +14,9 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const handledConfigParams = useRef(false);
     const pathname = usePathname();
     const hydrateUser = useUserStore((state) => state.hydrateUser);
+    const token = useUserStore((state) => state.token);
+    const user = useUserStore((state) => state.user);
+    const isReady = useUserStore((state) => state.isReady);
     const loadPublicSettings = useConfigStore((state) => state.loadPublicSettings);
     const publicSettings = useConfigStore((state) => state.publicSettings);
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -26,6 +30,15 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         }
         void hydrateUser().then(() => loadPublicSettings());
     }, [hydrateUser, isLoginPage, loadPublicSettings]);
+
+    useEffect(() => {
+        if (!isReady) return;
+        if (token && user && user.role !== "guest") {
+            void startUserDataSync(token);
+            return;
+        }
+        stopUserDataSync();
+    }, [isReady, token, user]);
 
     useEffect(() => {
         if (handledConfigParams.current) return;

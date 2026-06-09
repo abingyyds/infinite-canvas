@@ -46,6 +46,12 @@ func New() *gin.Engine {
 	api.POST("/admin/login", gin.WrapF(handler.AdminLogin))
 	api.GET("/gateway/status", middleware.UserAuth, gin.WrapF(handler.GatewayStatus))
 	api.POST("/gateway/models", middleware.UserAuth, gin.WrapF(handler.GatewayModels))
+	api.GET("/user-data/:domain", middleware.UserAuth, func(c *gin.Context) {
+		handler.UserDataSnapshot(c.Writer, c.Request, c.Param("domain"))
+	})
+	api.POST("/user-data/:domain", middleware.UserAuth, func(c *gin.Context) {
+		handler.SaveUserDataSnapshot(c.Writer, c.Request, c.Param("domain"))
+	})
 
 	admin := api.Group("/admin", middleware.AdminAuth)
 	admin.GET("/users", gin.WrapF(handler.AdminUsers))
