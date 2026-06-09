@@ -15,6 +15,7 @@ type loginRequest struct {
 	Password string                `json:"password"`
 	Provider model.GatewayProvider `json:"provider"`
 	BaseURL  string                `json:"baseUrl"`
+	SiteHost string                `json:"siteHost"`
 }
 
 type registerRequest struct {
@@ -56,6 +57,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 			BaseURL:  request.BaseURL,
 			Username: request.Username,
 			Password: request.Password,
+			SiteHost: request.SiteHost,
 		})
 		if err != nil {
 			FailError(w, err)

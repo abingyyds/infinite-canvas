@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +20,7 @@ import (
 type GatewayLoginSource struct {
 	Provider model.GatewayProvider `json:"provider"`
 	BaseURL  string                `json:"baseUrl"`
+	SiteHost string                `json:"siteHost"`
 }
 
 type GatewayLoginRequest struct {
@@ -25,6 +28,7 @@ type GatewayLoginRequest struct {
 	BaseURL  string                `json:"baseUrl"`
 	Username string                `json:"username"`
 	Password string                `json:"password"`
+	SiteHost string                `json:"siteHost"`
 }
 
 type GatewayStatus struct {
@@ -57,7 +61,17 @@ type gatewayLoginResult struct {
 	Username       string
 	Email          string
 	DisplayName    string
+	DistributorID  string
+	DistributorSlug string
+	SiteHost       string
 	SessionCookie  string
+}
+
+type gatewayDistributorInfo struct {
+	Belongs       bool
+	DistributorID string
+	Slug          string
+	SiteHost      string
 }
 
 type gatewayKey struct {
@@ -78,11 +92,11 @@ type gatewayModelRow struct {
 var gatewayHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 func LoginWithGateway(request GatewayLoginRequest) (GatewayLoginSession, error) {
-	sources := normalizeGatewaySources([]GatewayLoginSource{{Provider: request.Provider, BaseURL: request.BaseURL}})
+	sources := normalizeGatewaySources([]GatewayLoginSource{{Provider: request.Provider, BaseURL: request.BaseURL, SiteHost: request.SiteHost}})
 	if request.Provider == "" && strings.TrimSpace(request.BaseURL) != "" {
 		sources = normalizeGatewaySources([]GatewayLoginSource{
-			{Provider: model.GatewayProviderMain, BaseURL: request.BaseURL},
-			{Provider: model.GatewayProviderSite, BaseURL: request.BaseURL},
+			{Provider: model.GatewayProviderMain, BaseURL: request.BaseURL, SiteHost: request.SiteHost},
+			{Provider: model.GatewayProviderSite, BaseURL: request.BaseURL, SiteHost: request.SiteHost},
 		})
 	}
 	if len(sources) == 0 {
@@ -97,6 +111,18 @@ func LoginWithGateway(request GatewayLoginRequest) (GatewayLoginSession, error) 
 		}
 		session, account, models, notice, err := prepareGatewayLogin(result)
 		if err != nil {
+			if retrySource, ok := gatewaySiteRetrySource(source, err); ok {
+				retrySession, retryAccount, retryModels, retryNotice, retryErr := loginAndPrepareGatewaySource(retrySource, request.Username, request.Password)
+				if retryErr == nil {
+					return GatewayLoginSession{
+						AuthSession: retrySession,
+						Account:     publicGatewayAccount(retryAccount),
+						Models:      retryModels,
+						Notice:      retryNotice,
+					}, nil
+				}
+				return GatewayLoginSession{}, retryErr
+			}
 			return GatewayLoginSession{}, err
 		}
 		return GatewayLoginSession{
@@ -129,6 +155,18 @@ func LoginWithDefaultGateway(username string, password string) (GatewayLoginSess
 		}
 		session, account, models, notice, err := prepareGatewayLogin(result)
 		if err != nil {
+			if retrySource, ok := gatewaySiteRetrySource(source, err); ok {
+				retrySession, retryAccount, retryModels, retryNotice, retryErr := loginAndPrepareGatewaySource(retrySource, username, password)
+				if retryErr == nil {
+					return GatewayLoginSession{
+						AuthSession: retrySession,
+						Account:     publicGatewayAccount(retryAccount),
+						Models:      retryModels,
+						Notice:      retryNotice,
+					}, true, nil
+				}
+				return GatewayLoginSession{}, false, retryErr
+			}
 			return GatewayLoginSession{}, false, err
 		}
 		return GatewayLoginSession{
@@ -224,11 +262,19 @@ func DefaultGatewayLoginSources() []GatewayLoginSource {
 	raw = append(raw, parseGatewaySources(config.Cfg.GatewayLoginSources)...)
 	if config.Cfg.GatewayBaseURL != "" {
 		raw = append(raw,
-			GatewayLoginSource{Provider: model.GatewayProviderMain, BaseURL: config.Cfg.GatewayBaseURL},
-			GatewayLoginSource{Provider: model.GatewayProviderSite, BaseURL: config.Cfg.GatewayBaseURL},
+			GatewayLoginSource{Provider: model.GatewayProviderMain, BaseURL: config.Cfg.GatewayBaseURL, SiteHost: config.Cfg.GatewaySiteHost},
+			GatewayLoginSource{Provider: model.GatewayProviderSite, BaseURL: config.Cfg.GatewayBaseURL, SiteHost: config.Cfg.GatewaySiteHost},
 		)
 	}
 	return normalizeGatewaySources(raw)
+}
+
+func loginAndPrepareGatewaySource(source GatewayLoginSource, username string, password string) (model.AuthSession, model.GatewayAccount, []string, string, error) {
+	result, err := loginGatewaySource(source, username, password)
+	if err != nil {
+		return model.AuthSession{}, model.GatewayAccount{}, nil, "", err
+	}
+	return prepareGatewayLogin(result)
 }
 
 func loginGatewaySource(source GatewayLoginSource, username string, password string) (gatewayLoginResult, error) {
@@ -237,12 +283,12 @@ func loginGatewaySource(source GatewayLoginSource, username string, password str
 		return gatewayLoginResult{}, safeMessageError{message: "网关登录源未配置"}
 	}
 	if source.Provider == model.GatewayProviderSite {
-		return loginSiteGateway(source.BaseURL, username, password)
+		return loginSiteGateway(source.BaseURL, source.SiteHost, username, password)
 	}
-	return loginMainGateway(source.BaseURL, username, password)
+	return loginMainGateway(source.BaseURL, source.SiteHost, username, password)
 }
 
-func loginMainGateway(baseURL string, username string, password string) (gatewayLoginResult, error) {
+func loginMainGateway(baseURL string, siteHost string, username string, password string) (gatewayLoginResult, error) {
 	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
 	response, err := gatewayJSON(http.MethodPost, apiBaseURL(baseURL)+"/api/user/login", nil, body)
 	if err != nil {
@@ -265,7 +311,7 @@ func loginMainGateway(baseURL string, username string, password string) (gateway
 	if externalID == "" {
 		externalID = username
 	}
-	return gatewayLoginResult{
+	result := gatewayLoginResult{
 		Provider:       model.GatewayProviderMain,
 		BaseURL:        baseURL,
 		ExternalUserID: externalID,
@@ -273,12 +319,20 @@ func loginMainGateway(baseURL string, username string, password string) (gateway
 		Email:          anyString(user["email"]),
 		DisplayName:    firstNonEmpty(anyString(user["display_name"]), anyString(user["displayName"]), anyString(user["username"]), username),
 		SessionCookie:  cookie,
-	}, nil
+	}
+	if info, ok := fetchGatewayDistributorInfo(result); ok && info.Belongs {
+		result.Provider = model.GatewayProviderSite
+		result.DistributorID = info.DistributorID
+		result.DistributorSlug = info.Slug
+		result.SiteHost = resolveGatewaySiteHost(info, siteHost)
+	}
+	return result, nil
 }
 
-func loginSiteGateway(baseURL string, username string, password string) (gatewayLoginResult, error) {
+func loginSiteGateway(baseURL string, siteHost string, username string, password string) (gatewayLoginResult, error) {
 	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
-	response, err := gatewayJSON(http.MethodPost, apiBaseURL(baseURL)+"/api/dist/user/login", nil, body)
+	siteHost = resolveGatewaySiteHost(gatewayDistributorInfo{}, siteHost)
+	response, err := gatewayJSON(http.MethodPost, apiBaseURL(baseURL)+"/api/dist/user/login", gatewaySiteHeaders(siteHost), body)
 	if err != nil {
 		return gatewayLoginResult{}, err
 	}
@@ -306,8 +360,54 @@ func loginSiteGateway(baseURL string, username string, password string) (gateway
 		Username:       firstNonEmpty(anyString(user["username"]), username),
 		Email:          anyString(user["email"]),
 		DisplayName:    firstNonEmpty(anyString(user["display_name"]), anyString(user["displayName"]), anyString(user["username"]), username),
+		SiteHost:       siteHost,
 		SessionCookie:  cookie,
 	}, nil
+}
+
+func fetchGatewayDistributorInfo(result gatewayLoginResult) (gatewayDistributorInfo, bool) {
+	if result.SessionCookie == "" || result.ExternalUserID == "" {
+		return gatewayDistributorInfo{}, false
+	}
+	response, err := gatewayJSON(http.MethodGet, apiBaseURL(result.BaseURL)+"/api/user/self/distributor", gatewayCookieHeadersFor(result.SessionCookie, result.ExternalUserID, result.SiteHost), nil)
+	if err != nil {
+		return gatewayDistributorInfo{}, false
+	}
+	defer response.Body.Close()
+	var payload map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return gatewayDistributorInfo{}, false
+	}
+	if isGatewayFalse(payload) {
+		return gatewayDistributorInfo{}, false
+	}
+	data := extractGatewayData(payload)
+	info := gatewayDistributorInfo{
+		Belongs:       anyBool(data["belongs_to_distributor"]),
+		DistributorID: anyString(data["distributor_id"]),
+	}
+	if distributor, ok := data["distributor"].(map[string]any); ok {
+		info.Slug = anyString(distributor["slug"])
+		info.SiteHost = firstNonEmpty(anyString(distributor["domain"]), anyString(distributor["host"]))
+	}
+	return info, info.Belongs
+}
+
+func gatewaySiteRetrySource(source GatewayLoginSource, err error) (GatewayLoginSource, bool) {
+	if source.Provider == model.GatewayProviderSite || !isGatewaySiteKeyError(err) {
+		return GatewayLoginSource{}, false
+	}
+	source.Provider = model.GatewayProviderSite
+	source.SiteHost = resolveGatewaySiteHost(gatewayDistributorInfo{}, source.SiteHost)
+	return source, true
+}
+
+func isGatewaySiteKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "分站用户") || (strings.Contains(message, "分站") && strings.Contains(message, "密钥"))
 }
 
 func prepareGatewayLogin(result gatewayLoginResult) (model.AuthSession, model.GatewayAccount, []string, string, error) {
@@ -315,21 +415,19 @@ func prepareGatewayLogin(result gatewayLoginResult) (model.AuthSession, model.Ga
 	if err != nil {
 		return model.AuthSession{}, model.GatewayAccount{}, nil, "", err
 	}
-	user, err := upsertGatewayUser(result, ok, account.UserID)
-	if err != nil {
-		return model.AuthSession{}, model.GatewayAccount{}, nil, "", err
-	}
 	nowText := now()
 	if !ok {
 		account = model.GatewayAccount{ID: newID("gateway"), CreatedAt: nowText}
 	}
-	account.UserID = user.ID
 	account.Provider = result.Provider
 	account.BaseURL = result.BaseURL
 	account.ExternalUserID = result.ExternalUserID
 	account.Username = result.Username
 	account.Email = result.Email
 	account.DisplayName = result.DisplayName
+	account.DistributorID = result.DistributorID
+	account.DistributorSlug = result.DistributorSlug
+	account.SiteHost = resolveGatewaySiteHost(gatewayDistributorInfo{Slug: result.DistributorSlug, SiteHost: result.SiteHost}, result.SiteHost)
 	account.SessionCookie = result.SessionCookie
 	account.UpdatedAt = nowText
 
@@ -344,6 +442,11 @@ func prepareGatewayLogin(result gatewayLoginResult) (model.AuthSession, model.Ga
 	if err != nil {
 		return model.AuthSession{}, model.GatewayAccount{}, nil, "", err
 	}
+	user, err := upsertGatewayUser(result, ok, account.UserID)
+	if err != nil {
+		return model.AuthSession{}, model.GatewayAccount{}, nil, "", err
+	}
+	account.UserID = user.ID
 	account.Models = encodeGatewayModels(fetched.Models)
 	account.ModelsSource = fetched.Source
 	account, err = repository.SaveGatewayAccount(account)
@@ -388,10 +491,12 @@ func upsertGatewayUser(result gatewayLoginResult, hasAccount bool, userID string
 		_ = json.Unmarshal([]byte(user.Extra), &extra)
 	}
 	extra["gateway"] = map[string]string{
-		"provider":       string(result.Provider),
-		"baseUrl":        result.BaseURL,
-		"externalUserId": result.ExternalUserID,
-		"username":       result.Username,
+		"provider":        string(result.Provider),
+		"baseUrl":         result.BaseURL,
+		"externalUserId":  result.ExternalUserID,
+		"username":        result.Username,
+		"distributorId":   result.DistributorID,
+		"distributorSlug": result.DistributorSlug,
 	}
 	extraJSON, _ := json.Marshal(extra)
 	user.Extra = string(extraJSON)
@@ -604,6 +709,10 @@ func gatewayJSON(method string, requestURL string, headers map[string]string, bo
 		request.Header.Set("Content-Type", "application/json")
 	}
 	for key, value := range headers {
+		if strings.EqualFold(key, "Host") {
+			request.Host = value
+			continue
+		}
 		request.Header.Set(key, value)
 	}
 	response, err := gatewayHTTPClient.Do(request)
@@ -668,7 +777,14 @@ func parseGatewaySources(value string) []GatewayLoginSource {
 	for _, item := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ';' || r == '\n' }) {
 		parts := strings.SplitN(strings.TrimSpace(item), "=", 2)
 		if len(parts) == 2 {
-			result = append(result, GatewayLoginSource{Provider: model.GatewayProvider(strings.TrimSpace(parts[0])), BaseURL: strings.TrimSpace(parts[1])})
+			left := strings.TrimSpace(parts[0])
+			provider := left
+			siteHost := ""
+			if providerParts := strings.SplitN(left, "@", 2); len(providerParts) == 2 {
+				provider = strings.TrimSpace(providerParts[0])
+				siteHost = strings.TrimSpace(providerParts[1])
+			}
+			result = append(result, GatewayLoginSource{Provider: model.GatewayProvider(provider), BaseURL: strings.TrimSpace(parts[1]), SiteHost: siteHost})
 		} else if strings.HasPrefix(strings.ToLower(item), "http://") || strings.HasPrefix(strings.ToLower(item), "https://") {
 			result = append(result,
 				GatewayLoginSource{Provider: model.GatewayProviderMain, BaseURL: item},
@@ -688,12 +804,16 @@ func normalizeGatewaySources(sources []GatewayLoginSource) []GatewayLoginSource 
 		if provider == "" || baseURL == "" {
 			continue
 		}
-		key := string(provider) + ":" + baseURL
+		siteHost := normalizeGatewaySiteHost(source.SiteHost)
+		if siteHost == "" {
+			siteHost = normalizeGatewaySiteHost(config.Cfg.GatewaySiteHost)
+		}
+		key := string(provider) + ":" + baseURL + ":" + siteHost
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		result = append(result, GatewayLoginSource{Provider: provider, BaseURL: baseURL})
+		result = append(result, GatewayLoginSource{Provider: provider, BaseURL: baseURL, SiteHost: siteHost})
 	}
 	return result
 }
@@ -770,11 +890,108 @@ func gatewaySubscribedModelsPath() string {
 }
 
 func gatewayCookieHeaders(account model.GatewayAccount) map[string]string {
-	headers := map[string]string{"Cookie": account.SessionCookie}
-	if account.ExternalUserID != "" {
-		headers["New-Api-User"] = account.ExternalUserID
+	return gatewayCookieHeadersFor(account.SessionCookie, account.ExternalUserID, account.SiteHost)
+}
+
+func gatewayCookieHeadersFor(cookie string, externalUserID string, siteHost string) map[string]string {
+	headers := map[string]string{"Cookie": cookie}
+	if externalUserID != "" {
+		headers["New-Api-User"] = externalUserID
+	}
+	for key, value := range gatewaySiteHeaders(siteHost) {
+		headers[key] = value
 	}
 	return headers
+}
+
+func gatewaySiteHeaders(siteHost string) map[string]string {
+	siteHost = normalizeGatewaySiteHost(siteHost)
+	if siteHost == "" {
+		return nil
+	}
+	return map[string]string{
+		"X-Original-Host":  siteHost,
+		"X-Forwarded-Host": siteHost,
+		"Host":             siteHost,
+	}
+}
+
+func resolveGatewaySiteHost(info gatewayDistributorInfo, preferred string) string {
+	if host := normalizeGatewaySiteHost(preferred); host != "" {
+		return host
+	}
+	if host := normalizeGatewaySiteHost(info.SiteHost); host != "" {
+		return host
+	}
+	if host := normalizeGatewaySiteHost(config.Cfg.GatewaySiteHost); host != "" {
+		return host
+	}
+	slug := strings.TrimSpace(info.Slug)
+	if slug == "" {
+		return ""
+	}
+	if template := strings.TrimSpace(config.Cfg.GatewaySiteHostTemplate); template != "" {
+		value := strings.ReplaceAll(template, "{slug}", slug)
+		value = strings.ReplaceAll(value, "{id}", info.DistributorID)
+		if host := normalizeGatewaySiteHost(value); host != "" {
+			return host
+		}
+	}
+	if suffix := normalizeGatewaySiteHost(config.Cfg.GatewaySiteHostSuffix); suffix != "" {
+		return normalizeGatewaySiteHost(slug + "." + suffix)
+	}
+	if suffix := gatewayHostFromBaseURL(config.Cfg.GatewayPublicBaseURL); suffix != "" {
+		return normalizeGatewaySiteHost(slug + "." + suffix)
+	}
+	return ""
+}
+
+func gatewayHostFromBaseURL(baseURL string) string {
+	host := normalizeGatewaySiteHost(baseURL)
+	if host == "" || isInternalGatewayHost(host) {
+		return ""
+	}
+	return host
+}
+
+func normalizeGatewaySiteHost(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.Contains(value, ",") {
+		value = strings.TrimSpace(strings.Split(value, ",")[0])
+	}
+	if strings.HasPrefix(value, "//") {
+		value = "https:" + value
+	}
+	if strings.Contains(value, "://") {
+		if parsed, err := url.Parse(value); err == nil {
+			value = parsed.Host
+		}
+	}
+	if index := strings.IndexAny(value, "/?#"); index >= 0 {
+		value = value[:index]
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	value = strings.Trim(strings.ToLower(value), ".")
+	if value == "" || strings.ContainsAny(value, " \t\r\n@") {
+		return ""
+	}
+	return value
+}
+
+func isInternalGatewayHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == "localhost" ||
+		host == "::1" ||
+		strings.HasPrefix(host, "127.") ||
+		strings.HasPrefix(host, "0.0.0.0") ||
+		strings.HasSuffix(host, ".internal") ||
+		strings.HasSuffix(host, ".local") ||
+		strings.HasSuffix(host, ".up.railway.app")
 }
 
 func buildGatewayCookie(values []string) string {
@@ -905,6 +1122,28 @@ func anyString(value any) string {
 		return fmt.Sprint(typed)
 	default:
 		return ""
+	}
+}
+
+func anyBool(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes", "y":
+			return true
+		default:
+			return false
+		}
+	case float64:
+		return typed != 0
+	case int:
+		return typed != 0
+	case int64:
+		return typed != 0
+	default:
+		return false
 	}
 }
 

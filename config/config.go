@@ -31,6 +31,9 @@ type Config struct {
 	GatewayFallbackBaseURL      string `env:"GATEWAY_FALLBACK_BASE_URL"`
 	GatewayBaseURLCandidates    string `env:"GATEWAY_BASE_URL_CANDIDATES"`
 	GatewaySubscribedModelsPath string `env:"GATEWAY_SUBSCRIBED_MODELS_PATH"`
+	GatewaySiteHost             string `env:"GATEWAY_SITE_HOST"`
+	GatewaySiteHostSuffix       string `env:"GATEWAY_SITE_HOST_SUFFIX"`
+	GatewaySiteHostTemplate     string `env:"GATEWAY_SITE_HOST_TEMPLATE"`
 	GatewayKeyPrefix            string `env:"GATEWAY_KEY_PREFIX" envDefault:"canvas-auto"`
 	GatewayKeyGroup             string `env:"GATEWAY_KEY_GROUP"`
 	GatewayKeyGroupID           int    `env:"GATEWAY_KEY_GROUP_ID" envDefault:"0"`

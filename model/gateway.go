@@ -17,6 +17,9 @@ type GatewayAccount struct {
 	Username       string          `json:"username"`
 	Email          string          `json:"email"`
 	DisplayName    string          `json:"displayName"`
+	DistributorID  string          `json:"distributorId"`
+	DistributorSlug string         `json:"distributorSlug"`
+	SiteHost       string          `json:"siteHost"`
 	SessionCookie  string          `json:"sessionCookie,omitempty" gorm:"type:text"`
 	APIKey         string          `json:"apiKey,omitempty" gorm:"type:text"`
 	APIKeyID       string          `json:"apiKeyId"`

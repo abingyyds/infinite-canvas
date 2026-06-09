@@ -25,6 +25,26 @@ function safeRedirect(value: string | null): string {
     return cleaned;
 }
 
+function safeSiteHost(value: string | null): string {
+    const cleaned = (value ?? "").trim().replace(/[\t\n\r]/g, "");
+    if (!cleaned || cleaned.includes("@")) return "";
+    try {
+        const parsed = new URL(cleaned.includes("://") ? cleaned : `https://${cleaned}`);
+        return parsed.host.toLowerCase();
+    } catch {
+        return "";
+    }
+}
+
+function referrerHost() {
+    if (typeof document === "undefined" || !document.referrer) return "";
+    try {
+        return new URL(document.referrer).host.toLowerCase();
+    } catch {
+        return "";
+    }
+}
+
 export default function LoginPage() {
     return (
         <Suspense fallback={null}>
@@ -44,6 +64,7 @@ function LoginContent() {
     const allowRegister = useConfigStore((state) => state.publicSettings?.auth?.allowRegister !== false);
     const [mode, setMode] = useState<"login" | "register">("login");
     const redirect = safeRedirect(searchParams.get("redirect"));
+    const siteHost = safeSiteHost(searchParams.get("siteHost") || searchParams.get("site_host")) || referrerHost();
 
     useEffect(() => {
         const token = searchParams.get("token");
@@ -72,7 +93,7 @@ function LoginContent() {
                 return;
             }
             const action = mode === "register" ? register : login;
-            const user = await action({ username: values.username, password: values.password });
+            const user = await action({ username: values.username, password: values.password, siteHost });
             message.success(mode === "register" ? "注册成功" : "登录成功");
             window.location.assign(user.role === "admin" ? redirect : "/");
         } catch (error) {

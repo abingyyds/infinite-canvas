@@ -23,6 +23,7 @@ export type AuthSession = {
 export type AuthPayload = {
     username: string;
     password: string;
+    siteHost?: string;
 };
 
 export async function login(payload: AuthPayload) {
