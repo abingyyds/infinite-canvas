@@ -84,6 +84,7 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
 }
 
 async function createGrokVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
+    assertGrokVideoReferences(model, references, videoReferences, audioReferences);
     const inputReference = await buildGrokInputReferences(config, references, videoReferences, audioReferences);
     const size = normalizeVideoSize(config.size);
     const payload = {
@@ -370,6 +371,16 @@ function buildGrokVideoPromptText(prompt: string, references: ReferenceImage[]) 
     return `参考图片编号：${labels}。\n\n${text}`;
 }
 
+function assertGrokVideoReferences(model: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
+    if (!isGrokImageRequiredVideoModel(model) || references.length > 0) return;
+    const suffix = videoReferences.length || audioReferences.length ? "参考视频或音频不能替代输入图片。" : "";
+    throw new Error(`当前 Grok 1.5 视频模型只支持图生视频，请先添加参考图；纯文本生视频请切换到支持文生视频的视频模型。${suffix}`);
+}
+
+function isGrokImageRequiredVideoModel(model: string) {
+    return model.toLowerCase().includes("grok-imagine-video-1.5");
+}
+
 function isGrokImagineVideoModel(model: string) {
     return model.toLowerCase().includes("grok-imagine-video");
 }
@@ -393,11 +404,20 @@ function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
 }
 
 function readAxiosError(error: unknown, fallback: string) {
-    if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
+    if (axios.isAxiosError<unknown>(error)) {
         const responseData = error.response?.data;
-        return responseData?.msg || responseData?.error?.message || statusMessage(error.response?.status, fallback);
+        return normalizeVideoErrorMessage(errorResponseMessage(responseData) || statusMessage(error.response?.status, fallback));
     }
-    return error instanceof Error ? error.message : fallback;
+    return normalizeVideoErrorMessage(error instanceof Error ? error.message : fallback);
+}
+
+function errorResponseMessage(value: unknown) {
+    if (typeof value === "string") return value;
+    if (!value || typeof value !== "object") return "";
+    const payload = value as { error?: { message?: unknown }; message?: unknown; msg?: unknown };
+    if (typeof payload.msg === "string") return payload.msg;
+    if (typeof payload.error?.message === "string") return payload.error.message;
+    return typeof payload.message === "string" ? payload.message : "";
 }
 
 function statusMessage(status: number | undefined, fallback: string) {
@@ -416,6 +436,34 @@ async function assertVideoBlob(blob: Blob) {
     }
     if (typeof payload.code === "number" && payload.code !== 0) throw new Error(payload.msg || "视频下载失败");
     if (payload.error?.message) throw new Error(payload.error.message);
+}
+
+function normalizeVideoErrorMessage(message: string) {
+    let text = trimErrorText(message);
+    for (let index = 0; index < 5; index += 1) {
+        const next = nestedJSONMessage(text);
+        if (!next || next === text) break;
+        text = trimErrorText(next);
+    }
+    if (/requires an input image|text-to-video is not supported/i.test(text)) {
+        return "当前 Grok 1.5 视频模型只支持图生视频，请先添加参考图；纯文本生视频请切换到支持文生视频的视频模型。";
+    }
+    return text;
+}
+
+function nestedJSONMessage(text: string) {
+    const value = trimErrorText(text);
+    if (!value.startsWith("{") || !value.endsWith("}")) return "";
+    try {
+        const payload = JSON.parse(value) as { msg?: string; message?: string; error?: { message?: string } };
+        return payload.error?.message || payload.message || payload.msg || "";
+    } catch {
+        return "";
+    }
+}
+
+function trimErrorText(value: string) {
+    return String(value || "").trim();
 }
 
 async function buildGrokInputReferences(config: AiConfig, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
