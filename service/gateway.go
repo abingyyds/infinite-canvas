@@ -223,7 +223,7 @@ func UserGatewayChannel(userID string, modelName string) (model.ModelChannel, bo
 	return model.ModelChannel{
 		Protocol: "openai",
 		Name:     "Gateway",
-		BaseURL:  runtimeGatewayBaseURL(account.BaseURL),
+		BaseURL:  runtimeGatewayModelBaseURL(account.BaseURL, modelName),
 		APIKey:   account.APIKey,
 		Models:   models,
 		Weight:   1,
@@ -882,12 +882,47 @@ func runtimeGatewayBaseURL(accountBaseURL string) string {
 	return gatewayV1BaseURL(accountBaseURL)
 }
 
+func runtimeGatewayModelBaseURL(accountBaseURL string, modelName string) string {
+	if isSeedanceModelName(modelName) {
+		return runtimeGatewayPlanBaseURL(accountBaseURL)
+	}
+	return runtimeGatewayBaseURL(accountBaseURL)
+}
+
+func runtimeGatewayPlanBaseURL(accountBaseURL string) string {
+	candidates := []string{
+		config.Cfg.GatewayPublicBaseURL,
+		config.Cfg.GatewayFallbackBaseURL,
+	}
+	candidates = append(candidates, splitGatewayCandidates(config.Cfg.GatewayBaseURLCandidates)...)
+	candidates = append(candidates, accountBaseURL)
+	for _, item := range candidates {
+		baseURL := normalizeBaseURL(item)
+		if baseURL != "" {
+			return gatewayPlanBaseURL(baseURL)
+		}
+	}
+	return gatewayPlanBaseURL(accountBaseURL)
+}
+
 func gatewayV1BaseURL(baseURL string) string {
 	baseURL = normalizeBaseURL(baseURL)
 	if strings.HasSuffix(strings.ToLower(baseURL), "/v1") {
 		return baseURL
 	}
 	return baseURL + "/v1"
+}
+
+func gatewayPlanBaseURL(baseURL string) string {
+	baseURL = normalizeModelChannelBaseURL(baseURL)
+	lowerBaseURL := strings.ToLower(baseURL)
+	if strings.HasSuffix(lowerBaseURL, "/api/plan/v3") {
+		return baseURL
+	}
+	if strings.HasSuffix(lowerBaseURL, "/v1") {
+		return strings.TrimRight(baseURL[:len(baseURL)-3], "/") + "/api/plan/v3"
+	}
+	return baseURL + "/api/plan/v3"
 }
 
 func splitGatewayCandidates(value string) []string {
