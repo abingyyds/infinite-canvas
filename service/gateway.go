@@ -578,8 +578,7 @@ func ensureMainGatewayKey(account model.GatewayAccount) (gatewayKey, error) {
 }
 
 func ensureSiteGatewayKey(account model.GatewayAccount) (gatewayKey, error) {
-	headers := gatewayCookieHeaders(account)
-	tokens, err := listSiteGatewayKeys(account.BaseURL, headers)
+	tokens, err := listSiteGatewayKeys(account)
 	if err != nil {
 		return gatewayKey{}, err
 	}
@@ -592,7 +591,7 @@ func ensureSiteGatewayKey(account model.GatewayAccount) (gatewayKey, error) {
 		body["key_group_id"] = config.Cfg.GatewayKeyGroupID
 	}
 	payload, _ := json.Marshal(body)
-	response, err := createSiteGatewayKey(account.BaseURL, headers, payload)
+	response, err := createSiteGatewayKey(account, payload)
 	if err != nil {
 		return gatewayKey{}, err
 	}
@@ -623,13 +622,14 @@ func listMainGatewayKeys(baseURL string, headers map[string]string) ([]map[strin
 	return extractGatewayItems(payload), nil
 }
 
-func listSiteGatewayKeys(baseURL string, headers map[string]string) ([]map[string]any, error) {
-	response, err := gatewayJSON(http.MethodGet, apiBaseURL(baseURL)+"/api/user/self/distributor/token/list?page=1&page_size=200", headers, nil)
+func listSiteGatewayKeys(account model.GatewayAccount) ([]map[string]any, error) {
+	selfHeaders := gatewayCookieHeadersFor(account.SessionCookie, account.ExternalUserID, "")
+	response, err := gatewayJSON(http.MethodGet, apiBaseURL(account.BaseURL)+"/api/user/self/distributor/token/list?page=1&page_size=200", selfHeaders, nil)
 	if err != nil {
 		if !isGatewayEndpointMissingError(err) {
 			return nil, err
 		}
-		response, err = gatewayJSON(http.MethodGet, apiBaseURL(baseURL)+"/api/dist/token/list?page=1&page_size=200", headers, nil)
+		response, err = gatewayJSON(http.MethodGet, apiBaseURL(account.BaseURL)+"/api/dist/token/list?page=1&page_size=200", gatewayCookieHeaders(account), nil)
 	}
 	if err != nil {
 		return nil, err
@@ -642,15 +642,16 @@ func listSiteGatewayKeys(baseURL string, headers map[string]string) ([]map[strin
 	return extractGatewayItems(payload), nil
 }
 
-func createSiteGatewayKey(baseURL string, headers map[string]string, payload []byte) (*http.Response, error) {
-	response, err := gatewayJSON(http.MethodPost, apiBaseURL(baseURL)+"/api/user/self/distributor/token/create", headers, payload)
+func createSiteGatewayKey(account model.GatewayAccount, payload []byte) (*http.Response, error) {
+	selfHeaders := gatewayCookieHeadersFor(account.SessionCookie, account.ExternalUserID, "")
+	response, err := gatewayJSON(http.MethodPost, apiBaseURL(account.BaseURL)+"/api/user/self/distributor/token/create", selfHeaders, payload)
 	if err == nil {
 		return response, nil
 	}
 	if !isGatewayEndpointMissingError(err) {
 		return nil, err
 	}
-	return gatewayJSON(http.MethodPost, apiBaseURL(baseURL)+"/api/dist/token/create", headers, payload)
+	return gatewayJSON(http.MethodPost, apiBaseURL(account.BaseURL)+"/api/dist/token/create", gatewayCookieHeaders(account), payload)
 }
 
 func isGatewayEndpointMissingError(err error) bool {
