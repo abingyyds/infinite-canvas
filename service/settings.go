@@ -214,14 +214,16 @@ func normalizeModelChannelBaseURL(baseURL string) string {
 	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
 		path := strings.TrimRight(parsed.Path, "/")
 		lowerPath := strings.ToLower(path)
-		if index := strings.Index(lowerPath, "/api/plan/v3"); index >= 0 {
-			end := index + len("/api/plan/v3")
-			if len(lowerPath) == end || lowerPath[end] == '/' {
-				parsed.Path = path[:end]
-				parsed.RawPath = ""
-				parsed.RawQuery = ""
-				parsed.Fragment = ""
-				return strings.TrimRight(parsed.String(), "/")
+		for _, prefix := range []string{"/api/plan/v3", "/api/v3"} {
+			if index := strings.Index(lowerPath, prefix); index >= 0 {
+				end := index + len(prefix)
+				if len(lowerPath) == end || lowerPath[end] == '/' {
+					parsed.Path = path[:end]
+					parsed.RawPath = ""
+					parsed.RawQuery = ""
+					parsed.Fragment = ""
+					return strings.TrimRight(parsed.String(), "/")
+				}
 			}
 		}
 	}
@@ -230,7 +232,7 @@ func normalizeModelChannelBaseURL(baseURL string) string {
 
 func isArkAgentPlanChannel(channel model.ModelChannel) bool {
 	baseURL := strings.ToLower(normalizeModelChannelBaseURL(channel.BaseURL))
-	return strings.HasSuffix(baseURL, "/api/plan/v3")
+	return strings.HasSuffix(baseURL, "/api/plan/v3") || strings.HasSuffix(baseURL, "/api/v3")
 }
 
 func isSeedanceModelName(modelName string) bool {

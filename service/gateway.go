@@ -919,10 +919,13 @@ func gatewayPlanBaseURL(baseURL string) string {
 	if strings.HasSuffix(lowerBaseURL, "/api/plan/v3") {
 		return baseURL
 	}
-	if strings.HasSuffix(lowerBaseURL, "/v1") {
-		return strings.TrimRight(baseURL[:len(baseURL)-3], "/") + "/api/plan/v3"
+	if strings.HasSuffix(lowerBaseURL, "/api/v3") {
+		return baseURL
 	}
-	return baseURL + "/api/plan/v3"
+	if strings.HasSuffix(lowerBaseURL, "/v1") {
+		return strings.TrimRight(baseURL[:len(baseURL)-3], "/") + "/api/v3"
+	}
+	return baseURL + "/api/v3"
 }
 
 func splitGatewayCandidates(value string) []string {
