@@ -61,15 +61,16 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = []): Promise<VideoGenerationTask> {
     const model = (config.model || config.videoModel).trim();
     const isGrokVideo = isGrokImagineVideoModel(model);
+    const isOpenAIVideoJson = isGrokVideo || isOpenAICompatibleSeedanceVideoModel(model);
     assertVideoConfig(config, model);
     if (isSeedanceVideoConfig({ ...config, model })) {
         return createSeedanceTask(config, model, prompt, references, videoReferences, audioReferences);
     }
-    if ((videoReferences.length || audioReferences.length) && !isGrokVideo) {
+    if ((videoReferences.length || audioReferences.length) && !isOpenAIVideoJson) {
         throw new Error("当前视频接口只支持参考图；参考视频或参考音频请切换到 Grok Imagine Video、Seedance 2.0 / 火山 Agent Plan 模型，或移除参考素材");
     }
-    if (isGrokVideo) return createGrokVideoTask(config, model, prompt, references, videoReferences, audioReferences);
-    return createOpenAIVideoTask(config, model, prompt, references, isGrokVideo ? videoReferences : [], isGrokVideo ? audioReferences : []);
+    if (isOpenAIVideoJson) return createGrokVideoTask(config, model, prompt, references, videoReferences, audioReferences);
+    return createOpenAIVideoTask(config, model, prompt, references, [], []);
 }
 
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask): Promise<VideoGenerationTaskState> {
@@ -383,6 +384,11 @@ function isGrokImageRequiredVideoModel(model: string) {
 
 function isGrokImagineVideoModel(model: string) {
     return model.toLowerCase().includes("grok-imagine-video");
+}
+
+function isOpenAICompatibleSeedanceVideoModel(model: string) {
+    const value = model.toLowerCase();
+    return value.includes("seedance") && !value.includes("doubao-seedance");
 }
 
 function unwrapVideoResponse(payload: ApiVideoResponse) {

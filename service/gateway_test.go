@@ -32,6 +32,18 @@ func TestRuntimeGatewayModelBaseURLUsesContentPathForSeedance(t *testing.T) {
 	}
 }
 
+func TestRuntimeGatewayModelBaseURLKeepsV1ForOpenAICompatibleSeedance(t *testing.T) {
+	oldConfig := config.Cfg
+	t.Cleanup(func() { config.Cfg = oldConfig })
+	config.Cfg = config.Config{}
+
+	got := runtimeGatewayModelBaseURL("https://gateway.example.com", "seedance-2-beta-face")
+	want := "https://gateway.example.com/v1"
+	if got != want {
+		t.Fatalf("runtimeGatewayModelBaseURL = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeGatewayModelBaseURLRewritesPublicV1ForSeedance(t *testing.T) {
 	oldConfig := config.Cfg
 	t.Cleanup(func() { config.Cfg = oldConfig })

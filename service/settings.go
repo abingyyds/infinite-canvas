@@ -237,7 +237,7 @@ func isArkAgentPlanChannel(channel model.ModelChannel) bool {
 
 func isSeedanceModelName(modelName string) bool {
 	modelName = strings.ToLower(strings.TrimSpace(modelName))
-	return strings.Contains(modelName, "seedance") || strings.Contains(modelName, "doubao-seedance")
+	return strings.Contains(modelName, "doubao-seedance")
 }
 
 func enabledChannelModels(channels []model.ModelChannel) []string {

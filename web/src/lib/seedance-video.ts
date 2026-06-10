@@ -62,7 +62,7 @@ export function isSeedanceVideoConfig(config: Pick<AiConfig, "model" | "videoMod
 
 export function isSeedanceVideoModel(model: string) {
     const value = model.toLowerCase();
-    return value.includes("seedance") || value.includes("doubao-seedance");
+    return value.includes("doubao-seedance");
 }
 
 export function isSeedanceFastModel(model: string) {
