@@ -1,5 +1,6 @@
 import axios from "axios";
 
+import { GROK_PREVIEW_VIDEO_MODEL, isGrokImagineVideoModel, isGrokPreviewVideoModel, normalizeGrokPreviewModel, normalizeGrokPreviewSeconds, normalizeGrokPreviewVideoSize, normalizeGrokVideoAspectRatio, normalizeGrokVideoSize } from "@/lib/grok-video";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
@@ -9,7 +10,19 @@ import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
-type VideoResponse = { id?: string; request_id?: string; status?: string; error?: { message?: string }; video?: { url?: string; duration?: number } };
+type VideoResponse = {
+    id?: string;
+    request_id?: string;
+    task_id?: string;
+    video_id?: string;
+    status?: string;
+    error?: { message?: string };
+    video?: { url?: string; video_url?: string; duration?: number };
+    url?: string;
+    video_url?: string;
+    content?: { url?: string; video_url?: string } | null;
+    output?: { url?: string; video_url?: string; videos?: Array<{ url?: string; video_url?: string }> } | null;
+};
 type ApiVideoResponse = VideoResponse | { code?: number; data?: VideoResponse | null; msg?: string };
 type SeedanceTask = {
     id: string;
@@ -69,7 +82,9 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     if ((videoReferences.length || audioReferences.length) && !isOpenAIVideoJson) {
         throw new Error("当前视频接口只支持参考图；参考视频或参考音频请切换到 Grok Imagine Video、Seedance 2.0 / 火山 Agent Plan 模型，或移除参考素材");
     }
-    if (isOpenAIVideoJson) return createGrokVideoTask(config, model, prompt, references, videoReferences, audioReferences);
+    if (isGrokPreviewVideoModel(model)) return createGrokPreviewVideoTask(config, model, prompt, references, videoReferences, audioReferences);
+    if (isGrokVideo) return createGrokTextVideoTask(config, model, prompt, references, videoReferences, audioReferences);
+    if (isOpenAIVideoJson) return createReferenceJsonVideoTask(config, model, prompt, references, videoReferences, audioReferences);
     return createOpenAIVideoTask(config, model, prompt, references, [], []);
 }
 
@@ -84,8 +99,65 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
     throw new Error("视频接口没有返回可播放的视频");
 }
 
-async function createGrokVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
-    assertGrokVideoReferences(model, references, videoReferences, audioReferences);
+async function createGrokPreviewVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
+    assertGrokPreviewReferences(references, videoReferences, audioReferences);
+    const firstFrame = await imageToDataUrl(references[0]);
+    if (!firstFrame?.startsWith("data:image/")) throw new Error("首帧图片读取失败，请重新上传图片");
+    const payload = {
+        model: config.channelMode === "remote" ? model : normalizeGrokPreviewModel(model),
+        prompt: prompt.trim(),
+        images: [firstFrame, firstFrame],
+        seconds: normalizeGrokPreviewSeconds(config.videoSeconds, model),
+        size: normalizeGrokPreviewVideoSize(config.size),
+    };
+
+    try {
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), payload, { headers: aiHeaders(config, "application/json") })).data);
+        const id = readVideoTaskId(created);
+        if (!id) throw new Error("视频接口没有返回任务 ID");
+        return { id, provider: "openai", model };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Grok 1.5 preview 视频任务创建失败"));
+    }
+}
+
+async function createGrokTextVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
+    assertGrokTextVideoReferences(references, videoReferences, audioReferences);
+    const seconds = Number(normalizeVideoSeconds(config.videoSeconds));
+    const size = normalizeGrokVideoSize(config.size);
+    const aspectRatio = normalizeGrokVideoAspectRatio(config.size || size);
+    const resolution = normalizeVideoResolution(config.vquality);
+    const videoConfig = {
+        seconds,
+        duration: seconds,
+        size,
+        aspect_ratio: aspectRatio,
+        resolution,
+        resolution_name: resolution,
+    };
+    const payload = {
+        model,
+        stream: false,
+        messages: [{ role: "user", content: [{ type: "text", text: prompt.trim() }] }],
+        duration: seconds,
+        seconds,
+        aspect_ratio: aspectRatio,
+        size,
+        video_config: videoConfig,
+        metadata: { video_config: videoConfig },
+    };
+
+    try {
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), payload, { headers: aiHeaders(config, "application/json") })).data);
+        const id = readVideoTaskId(created);
+        if (!id) throw new Error("视频接口没有返回任务 ID");
+        return { id, provider: "openai", model };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Grok 视频任务创建失败"));
+    }
+}
+
+async function createReferenceJsonVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
     const inputReference = await buildGrokInputReferences(config, references, videoReferences, audioReferences);
     const size = normalizeVideoSize(config.size);
     const payload = {
@@ -100,11 +172,11 @@ async function createGrokVideoTask(config: AiConfig, model: string, prompt: stri
 
     try {
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), payload, { headers: aiHeaders(config, "application/json") })).data);
-        const id = created.request_id || created.id;
+        const id = readVideoTaskId(created);
         if (!id) throw new Error("视频接口没有返回任务 ID");
         return { id, provider: "openai", model };
     } catch (error) {
-        throw new Error(readAxiosError(error, "Grok 视频任务创建失败"));
+        throw new Error(readAxiosError(error, "视频任务创建失败"));
     }
 }
 
@@ -124,8 +196,9 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     audioFiles.forEach((file) => body.append("input_reference[]", file));
     try {
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { headers: aiHeaders(config) })).data);
-        if (!created.id) throw new Error("视频接口没有返回任务 ID");
-        return { id: created.id, provider: "openai", model };
+        const id = readVideoTaskId(created);
+        if (!id) throw new Error("视频接口没有返回任务 ID");
+        return { id, provider: "openai", model };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务创建失败"));
     }
@@ -184,18 +257,19 @@ async function resolveGrokAudioUrl(config: AiConfig, audio: ReferenceAudio) {
 async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask): Promise<VideoGenerationTaskState> {
     try {
         const video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${task.id}`), { headers: aiHeaders(config), params: config.channelMode === "remote" ? { model: task.model } : undefined })).data);
-        if (video.status === "done") {
-            if (!video.video?.url) return { status: "failed", error: "视频任务完成但没有返回视频 URL" };
+        const status = String(video.status || "").toLowerCase();
+        const videoUrl = readVideoUrl(video);
+        if (videoUrl && (!status || isCompletedVideoStatus(status))) {
             refreshRemoteUser(config);
-            return { status: "completed", result: await videoResultFromUrl(video.video.url) };
+            return { status: "completed", result: await videoResultFromUrl(videoUrl) };
         }
-        if (video.status === "completed") {
+        if (isCompletedVideoStatus(status)) {
             const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${task.id}/content`), { headers: aiHeaders(config), params: config.channelMode === "remote" ? { model: task.model } : undefined, responseType: "blob" });
             await assertVideoBlob(content.data);
             refreshRemoteUser(config);
             return { status: "completed", result: { blob: content.data } };
         }
-        if (video.status === "failed" || video.status === "expired" || video.status === "cancelled") return { status: "failed", error: video.error?.message || (video.status === "expired" ? "视频生成任务已过期" : "视频生成失败") };
+        if (isFailedVideoStatus(status)) return { status: "failed", error: video.error?.message || (status === "expired" ? "视频生成任务已过期" : "视频生成失败") };
         return { status: "pending" };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务查询失败"));
@@ -372,18 +446,15 @@ function buildGrokVideoPromptText(prompt: string, references: ReferenceImage[]) 
     return `参考图片编号：${labels}。\n\n${text}`;
 }
 
-function assertGrokVideoReferences(model: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
-    if (!isGrokImageRequiredVideoModel(model) || references.length > 0) return;
-    const suffix = videoReferences.length || audioReferences.length ? "参考视频或音频不能替代输入图片。" : "";
-    throw new Error(`当前 Grok 1.5 视频模型只支持图生视频，请先添加参考图；纯文本生视频请切换到支持文生视频的视频模型。${suffix}`);
+function assertGrokPreviewReferences(references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
+    if (videoReferences.length || audioReferences.length) throw new Error("Grok 1.5 preview 只支持首帧图片，不支持参考视频或参考音频");
+    if (!references.length) throw new Error("Grok 1.5 preview 只支持首帧生视频，请先添加 1 张首帧图片");
+    if (references.length > 1) throw new Error("Grok 1.5 preview 只支持 1 张首帧图片，请只保留一张参考图");
 }
 
-function isGrokImageRequiredVideoModel(model: string) {
-    return model.toLowerCase().includes("grok-imagine-video-1.5");
-}
-
-function isGrokImagineVideoModel(model: string) {
-    return model.toLowerCase().includes("grok-imagine-video");
+function assertGrokTextVideoReferences(references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
+    if (!references.length && !videoReferences.length && !audioReferences.length) return;
+    throw new Error("grok-imagine-video 当前按非流文生视频接口发送，不支持参考素材；首帧生视频请切换到 Grok 1.5 preview 模型");
 }
 
 function isOpenAICompatibleSeedanceVideoModel(model: string) {
@@ -397,6 +468,22 @@ function unwrapVideoResponse(payload: ApiVideoResponse) {
 
 function unwrapSeedanceTask(payload: ApiEnvelope<SeedanceTask>) {
     return unwrapEnvelope(payload, "Seedance 接口没有返回任务");
+}
+
+function readVideoTaskId(payload: VideoResponse) {
+    return payload.request_id || payload.task_id || payload.video_id || payload.id;
+}
+
+function readVideoUrl(payload: VideoResponse) {
+    return payload.video?.url || payload.video?.video_url || payload.url || payload.video_url || payload.content?.video_url || payload.content?.url || payload.output?.video_url || payload.output?.url || payload.output?.videos?.[0]?.url || payload.output?.videos?.[0]?.video_url || "";
+}
+
+function isCompletedVideoStatus(status: string) {
+    return status === "done" || status === "completed" || status === "succeeded" || status === "success";
+}
+
+function isFailedVideoStatus(status: string) {
+    return status === "failed" || status === "expired" || status === "cancelled" || status === "canceled";
 }
 
 function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
@@ -420,9 +507,10 @@ function readAxiosError(error: unknown, fallback: string) {
 function errorResponseMessage(value: unknown) {
     if (typeof value === "string") return value;
     if (!value || typeof value !== "object") return "";
-    const payload = value as { error?: { message?: unknown }; message?: unknown; msg?: unknown };
-    if (typeof payload.msg === "string") return payload.msg;
+    const payload = value as { error?: { message?: unknown }; message?: unknown; msg?: unknown; detail?: unknown };
     if (typeof payload.error?.message === "string") return payload.error.message;
+    if (typeof payload.detail === "string") return payload.detail;
+    if (typeof payload.msg === "string") return payload.msg;
     return typeof payload.message === "string" ? payload.message : "";
 }
 
@@ -452,7 +540,7 @@ function normalizeVideoErrorMessage(message: string) {
         text = trimErrorText(next);
     }
     if (/requires an input image|text-to-video is not supported/i.test(text)) {
-        return "当前 Grok 1.5 视频模型只支持图生视频，请先添加参考图；纯文本生视频请切换到支持文生视频的视频模型。";
+        return `${GROK_PREVIEW_VIDEO_MODEL} 只支持首帧生视频，请先添加 1 张首帧图片；纯文本生视频请切换到 grok-imagine-video。`;
     }
     return text;
 }

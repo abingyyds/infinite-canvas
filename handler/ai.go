@@ -197,6 +197,9 @@ func prepareAIProxyBody(path string, body []byte, contentType string) ([]byte, s
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, "", err
 	}
+	if isGrokImagineVideo(payload.Model) {
+		return prepareGrokVideoJSONBody(body, contentType, payload.Model)
+	}
 	var buffer bytes.Buffer
 	writer := multipart.NewWriter(&buffer)
 	writeMultipartField(writer, "model", payload.Model)
@@ -218,6 +221,22 @@ func prepareAIProxyBody(path string, body []byte, contentType string) ([]byte, s
 		return nil, "", err
 	}
 	return buffer.Bytes(), writer.FormDataContentType(), nil
+}
+
+func prepareGrokVideoJSONBody(body []byte, contentType string, modelName string) ([]byte, string, error) {
+	if !isGrokPreviewVideo(modelName) || modelName == "grok-imagine-video-1.5-preview" {
+		return body, contentType, nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, "", err
+	}
+	payload["model"] = "grok-imagine-video-1.5-preview"
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return nil, "", err
+	}
+	return normalized, contentType, nil
 }
 
 func writeMultipartField(writer *multipart.Writer, key string, value string) {
@@ -287,6 +306,14 @@ func escapeMultipartQuote(value string) string {
 func isHTTPURL(value string) bool {
 	lower := strings.ToLower(strings.TrimSpace(value))
 	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
+func isGrokImagineVideo(modelName string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "grok-imagine-video")
+}
+
+func isGrokPreviewVideo(modelName string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "grok-imagine-video-1.5-preview")
 }
 
 func readMultipartModel(body []byte, contentType string) string {
@@ -395,6 +422,7 @@ func aiUpstreamErrorDetail(body []byte) string {
 	var payload struct {
 		Msg     string `json:"msg"`
 		Message string `json:"message"`
+		Detail  string `json:"detail"`
 		Error   struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
@@ -409,6 +437,9 @@ func aiUpstreamErrorDetail(body []byte) string {
 				return safeUpstreamText(payload.Error.Code + " " + payload.Error.Message)
 			}
 			return safeUpstreamText(payload.Error.Message)
+		}
+		if payload.Detail != "" {
+			return safeUpstreamText(payload.Detail)
 		}
 		if payload.Msg != "" {
 			return safeUpstreamText(payload.Msg)
