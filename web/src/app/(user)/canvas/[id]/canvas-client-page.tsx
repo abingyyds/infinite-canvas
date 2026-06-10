@@ -1932,6 +1932,7 @@ function InfiniteCanvasPage() {
 
                     let hasSuccess = false;
                     let hasFailure = false;
+                    let firstFailureDetails = "";
                     await Promise.all(
                         targetIds.map(async (targetId) => {
                             try {
@@ -1970,20 +1971,22 @@ function InfiniteCanvasPage() {
                             } catch (error) {
                                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                                 hasFailure = true;
+                                firstFailureDetails ||= errorDetails;
                                 setNodes((prev) => prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node)));
                                 return false;
                             }
                         }),
                     );
-                    if (hasFailure) message.error(hasSuccess ? "部分图片生成失败" : "全部图片生成失败");
+                    const batchFailureDetails = firstFailureDetails || "图片生成失败";
+                    if (hasFailure) message.error(`${hasSuccess ? "部分图片生成失败" : "全部图片生成失败"}：${batchFailureDetails}`);
                     setNodes((prev) =>
                         prev.map((node) =>
                             node.id === nodeId && isConfigNode
-                                ? { ...node, metadata: { ...node.metadata, status: hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: hasSuccess ? undefined : "全部图片生成失败" } }
+                                ? { ...node, metadata: { ...node.metadata, status: hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: hasSuccess ? undefined : batchFailureDetails } }
                                 : node.id === nodeId && isEmptyImageNode
-                                  ? { ...node, metadata: { ...node.metadata, status: hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: hasSuccess ? undefined : "全部图片生成失败" } }
+                                  ? { ...node, metadata: { ...node.metadata, status: hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: hasSuccess ? undefined : batchFailureDetails } }
                                   : node.id === rootId && !hasSuccess
-                                    ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails: "全部图片生成失败" } }
+                                    ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails: batchFailureDetails } }
                                     : node,
                         ),
                     );

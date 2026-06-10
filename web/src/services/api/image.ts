@@ -15,9 +15,11 @@ export type ChatCompletionMessage = {
 
 type ImageApiResponse = {
     data?: Array<Record<string, unknown>>;
-    error?: { message?: string };
+    error?: unknown;
     code?: number;
     msg?: string;
+    message?: string;
+    detail?: unknown;
 };
 
 const QUALITY_BASE: Record<string, number> = {
@@ -120,7 +122,10 @@ function resolveImageDataUrl(item: Record<string, unknown>) {
 
 function parseImagePayload(payload: ImageApiResponse) {
     if (typeof payload.code === "number" && payload.code !== 0) {
-        throw new Error(payload.msg || "请求失败");
+        throw new Error(errorResponseMessage(payload) || "请求失败");
+    }
+    if (payload.error) {
+        throw new Error(errorResponseMessage(payload) || "请求失败");
     }
     const images =
         payload.data
@@ -136,12 +141,52 @@ function parseImagePayload(payload: ImageApiResponse) {
 }
 
 function readAxiosError(error: unknown, fallback: string) {
-    if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
-        const responseData = error.response?.data;
-        if (typeof responseData === "string" && responseData.trim()) return responseData;
-        return responseData?.msg || responseData?.error?.message || readStatusError(error.response?.status, fallback);
+    if (axios.isAxiosError<unknown>(error)) {
+        return errorResponseMessage(error.response?.data) || readStatusError(error.response?.status, fallback);
     }
-    return error instanceof Error ? error.message : fallback;
+    return error instanceof Error ? normalizeErrorMessage(error.message) || fallback : fallback;
+}
+
+function errorResponseMessage(value: unknown): string {
+    if (typeof value === "string") return normalizeErrorMessage(value);
+    if (!value || typeof value !== "object") return "";
+    const payload = value as Record<string, unknown>;
+    for (const key of ["msg", "message", "detail", "error_description"]) {
+        const message = errorValueMessage(payload[key]);
+        if (message) return message;
+    }
+    if (payload.error) {
+        const message = errorResponseMessage(payload.error);
+        if (message && payload.error && typeof payload.error === "object") {
+            const code = errorValueMessage((payload.error as Record<string, unknown>).code);
+            return code && !message.includes(code) ? `${code} ${message}` : message;
+        }
+        if (message) return message;
+    }
+    return errorResponseMessage(payload.data);
+}
+
+function errorValueMessage(value: unknown) {
+    if (typeof value === "string") return normalizeErrorMessage(value);
+    return value && typeof value === "object" ? errorResponseMessage(value) : "";
+}
+
+function normalizeErrorMessage(message: string) {
+    let text = message.replace(/\s+/g, " ").trim();
+    for (let index = 0; index < 4; index += 1) {
+        const next = nestedJSONMessage(text);
+        if (!next || next === text) break;
+        text = next;
+    }
+    return text;
+}
+
+function nestedJSONMessage(message: string) {
+    try {
+        return errorResponseMessage(JSON.parse(message));
+    } catch {
+        return "";
+    }
 }
 
 function readStatusError(status: number | undefined, fallback: string) {
