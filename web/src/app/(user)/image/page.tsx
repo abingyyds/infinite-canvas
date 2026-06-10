@@ -13,7 +13,7 @@ import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/c
 import { canvasThemes } from "@/lib/canvas-theme";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { scopedStoreKey } from "@/lib/user-scope";
-import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { modelMatchesCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
@@ -72,6 +72,12 @@ function scopedLogKey(id: string) {
     return `${scopedStoreKey(LOG_STORE_KEY)}:${id}`;
 }
 
+function resolveImageModel(config: AiConfig) {
+    if (modelMatchesCapability(config.imageModel, "image")) return config.imageModel;
+    if (modelMatchesCapability(config.model, "image")) return config.model;
+    return "";
+}
+
 export default function ImagePage() {
     const { message } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -96,7 +102,7 @@ export default function ImagePage() {
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
-    const model = effectiveConfig.imageModel || effectiveConfig.model;
+    const model = resolveImageModel(effectiveConfig);
     const canGenerate = Boolean(prompt.trim());
     const generationCount = Math.max(1, Math.min(10, Number(config.count) || 1));
 
@@ -273,7 +279,8 @@ export default function ImagePage() {
         setLogsOpen(false);
         setPrompt(log.prompt);
         setReferences(log.references || []);
-        if (log.config.imageModel || log.model) updateConfig("imageModel", log.config.imageModel || log.model);
+        const logImageModel = resolveImageModel({ imageModel: log.config.imageModel, model: log.model } as AiConfig);
+        if (logImageModel) updateConfig("imageModel", logImageModel);
         if (log.config.quality) updateConfig("quality", log.config.quality);
         if (log.config.size) updateConfig("size", log.config.size);
         if (log.config.count) updateConfig("count", log.config.count);
@@ -758,9 +765,10 @@ function serializeLog(log: GenerationLog): GenerationLog {
 }
 
 function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
+    const model = log.config?.model || log.model || "";
     return {
-        model: log.config?.model || log.model || "",
-        imageModel: log.config?.imageModel || log.model || "",
+        model,
+        imageModel: resolveImageModel({ imageModel: log.config?.imageModel || "", model } as AiConfig),
         quality: log.config?.quality || log.quality || "",
         size: log.config?.size || log.size || "",
         count: log.config?.count || String(log.imageCount || log.successCount || 1),
@@ -808,7 +816,7 @@ function buildLog({
 }): GenerationLog {
     const logConfig = {
         model: config.model,
-        imageModel: config.imageModel,
+        imageModel: resolveImageModel({ imageModel: config.imageModel, model: config.model } as AiConfig),
         quality: config.quality,
         size: config.size,
         count: config.count,

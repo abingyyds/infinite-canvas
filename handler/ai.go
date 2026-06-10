@@ -65,7 +65,7 @@ func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 		return
 	}
 	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
-	copyAIResponse(w, request, nil)
+	copyAIResponse(w, request, modelName, path, nil)
 }
 
 func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
@@ -118,17 +118,17 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		FailError(w, err)
 		return
 	}
-	copyAIResponse(w, request, func() {
+	copyAIResponse(w, request, modelName, path, func() {
 		if err := service.RefundUserCredits(user.ID, modelName, credits, path); err != nil {
 			log.Printf("AI proxy refund credits failed: user=%s model=%s credits=%d err=%v", user.ID, modelName, credits, err)
 		}
 	})
 }
 
-func copyAIResponse(w http.ResponseWriter, request *http.Request, onFailure func()) {
+func copyAIResponse(w http.ResponseWriter, request *http.Request, modelName string, path string, onFailure func()) {
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		log.Printf("AI proxy request failed: url=%s err=%v", request.URL.String(), err)
+		log.Printf("AI proxy request failed: url=%s path=%s model=%s err=%v", request.URL.String(), path, modelName, err)
 		if onFailure != nil {
 			onFailure()
 		}
@@ -139,7 +139,7 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, onFailure func
 
 	if response.StatusCode >= http.StatusBadRequest {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		log.Printf("AI upstream error: url=%s status=%d", request.URL.String(), response.StatusCode)
+		log.Printf("AI upstream error: url=%s path=%s model=%s status=%d detail=%s", request.URL.String(), path, modelName, response.StatusCode, aiUpstreamErrorDetail(body))
 		if onFailure != nil {
 			onFailure()
 		}

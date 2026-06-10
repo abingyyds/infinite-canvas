@@ -10,7 +10,7 @@ import { requestEdit, requestGeneration, requestImageQuestion } from "@/services
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { DOCS_URL } from "@/constant/env";
-import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { defaultConfig, modelMatchesCapability, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
 import { resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
@@ -240,6 +240,7 @@ function InfiniteCanvasPage() {
 
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
+    const effectiveImageModel = resolveImageModel(effectiveConfig);
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
@@ -510,7 +511,7 @@ function InfiniteCanvasPage() {
 
     const createConnectedNode = useCallback(
         (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Config | CanvasNodeType.Video | CanvasNodeType.Audio, pending: PendingConnectionCreate) => {
-            const metadata = type === CanvasNodeType.Config ? { model: effectiveConfig.imageModel || effectiveConfig.model, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count) } : undefined;
+            const metadata = type === CanvasNodeType.Config ? { model: effectiveImageModel, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count) } : undefined;
             const newNode = createCanvasNode(type, pending.position, metadata);
             const connection = normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode], pending.connection.handleType);
             if (!connection) {
@@ -525,7 +526,7 @@ function InfiniteCanvasPage() {
             setPendingConnectionCreate(null);
             setConnecting(null);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, message, setConnecting],
+        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.size, effectiveImageModel, message, setConnecting],
     );
 
     const cancelPendingConnectionCreate = useCallback(() => {
@@ -654,7 +655,7 @@ function InfiniteCanvasPage() {
             const configMetadata =
                 type === CanvasNodeType.Config
                     ? {
-                          model: effectiveConfig.imageModel || effectiveConfig.model,
+                          model: effectiveImageModel,
                           size: effectiveConfig.size,
                           count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
                       }
@@ -666,7 +667,7 @@ function InfiniteCanvasPage() {
             setSelectedConnectionId(null);
             if (type !== CanvasNodeType.Text && type !== CanvasNodeType.Audio) setDialogNodeId(newNode.id);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, getCanvasCenter],
+        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.size, effectiveImageModel, getCanvasCenter],
     );
 
     const deleteNodes = useCallback(
@@ -2105,7 +2106,7 @@ function InfiniteCanvasPage() {
                 hasSavedImageMetadata && savedImageMetadata
                     ? {
                           ...effectiveConfig,
-                          model: savedImageMetadata.model || effectiveConfig.imageModel || effectiveConfig.model,
+                          model: savedImageMetadata.model && modelMatchesCapability(savedImageMetadata.model, "image") ? savedImageMetadata.model : effectiveImageModel,
                           quality: savedImageMetadata.quality || effectiveConfig.quality,
                           size: savedImageMetadata.size || effectiveConfig.size,
                           count: "1",
@@ -2187,7 +2188,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, message, openConfigDialog],
+        [effectiveConfig, effectiveImageModel, message, openConfigDialog],
     );
 
     const generateImageFromTextNode = useCallback(
@@ -2208,7 +2209,7 @@ function InfiniteCanvasPage() {
                 },
                 {
                     prompt: "",
-                    model: effectiveConfig.imageModel || effectiveConfig.model,
+                    model: effectiveImageModel,
                     size: effectiveConfig.size,
                     count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
                 },
@@ -2224,7 +2225,7 @@ function InfiniteCanvasPage() {
             setSelectedConnectionId(null);
             setDialogNodeId(configNode.id);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, message],
+        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.size, effectiveImageModel, message],
     );
 
     const insertAssistantImage = useCallback(
@@ -2923,6 +2924,19 @@ function getGenerationCount(count: string) {
     return Math.max(1, Math.min(15, Math.floor(Math.abs(Number(count)) || 1)));
 }
 
+function resolveImageModel(config: AiConfig) {
+    if (modelMatchesCapability(config.imageModel, "image")) return config.imageModel;
+    if (modelMatchesCapability(config.model, "image")) return config.model;
+    return "";
+}
+
+function resolveGenerationModel(config: AiConfig, mode: CanvasNodeGenerationMode) {
+    if (mode === "image") return resolveImageModel(config);
+    if (mode === "video") return modelMatchesCapability(config.videoModel, "video") ? config.videoModel : modelMatchesCapability(config.model, "video") ? config.model : "";
+    if (mode === "audio") return modelMatchesCapability(config.audioModel, "audio") ? config.audioModel : modelMatchesCapability(config.model, "audio") ? config.model : defaultConfig.audioModel;
+    return modelMatchesCapability(config.textModel, "text") ? config.textModel : modelMatchesCapability(config.model, "text") ? config.model : defaultConfig.textModel;
+}
+
 function applyNodeConfigPatch(node: CanvasNodeData, patch: Partial<CanvasNodeData["metadata"]>) {
     const safePatch = patch || {};
     const next = { ...node, metadata: { ...node.metadata, ...safePatch } };
@@ -2959,10 +2973,10 @@ function getInputSummary(inputs: NodeGenerationInput[]) {
 }
 
 function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode): AiConfig {
-    const defaultModel = mode === "image" ? config.imageModel : mode === "video" ? config.videoModel : mode === "audio" ? config.audioModel : config.textModel;
+    const nodeModel = node?.metadata?.model;
     return {
         ...config,
-        model: node?.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : config.model || defaultConfig.model),
+        model: nodeModel && modelMatchesCapability(nodeModel, mode) ? nodeModel : resolveGenerationModel(config, mode),
         quality: node?.metadata?.quality || config.quality || defaultConfig.quality,
         size: node?.metadata?.size || config.size || defaultConfig.size,
         videoSeconds: node?.metadata?.seconds || config.videoSeconds || defaultConfig.videoSeconds,

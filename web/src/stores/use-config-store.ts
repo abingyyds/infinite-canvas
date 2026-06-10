@@ -148,7 +148,7 @@ function isVideoModelName(model: string) {
 
 function isImageModelName(model: string) {
     const value = model.toLowerCase();
-    return !isVideoModelName(model) && !isAudioModelName(model) && (value.includes("seedream") || value.includes("gpt-image") || value.includes("image") || value.includes("dall-e") || value.includes("dalle") || value.includes("imagen") || value.includes("flux") || value.includes("sdxl") || value.includes("stable-diffusion") || value.includes("midjourney"));
+    return !isVideoModelName(model) && !isAudioModelName(model) && (value.includes("seedream") || value.includes("gpt-image") || value.includes("image") || value.includes("dall-e") || value.includes("dalle") || value.includes("imagen") || value.includes("flux") || value.includes("sdxl") || value.includes("stable-diffusion") || value.includes("midjourney") || value.includes("banana"));
 }
 
 function isAudioModelName(model: string) {
@@ -230,14 +230,18 @@ export const useConfigStore = create<ConfigStore>()(
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
                 const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
                 const config = { ...defaultConfig, ...persistedConfig };
+                const imageModels = Array.isArray(persistedConfig.imageModels) ? normalizeModelList(config.imageModels) : filterModelsByCapability(config.models, "image");
+                const videoModels = Array.isArray(persistedConfig.videoModels) ? normalizeModelList(config.videoModels) : filterModelsByCapability(config.models, "video");
+                const textModels = Array.isArray(persistedConfig.textModels) ? normalizeModelList(config.textModels) : filterModelsByCapability(config.models, "text");
+                const audioModels = Array.isArray(persistedConfig.audioModels) ? normalizeModelList(config.audioModels) : filterModelsByCapability(config.models, "audio");
                 return {
                     ...current,
                     webdav: { ...defaultWebdavSyncConfig, ...persistedWebdav },
                     config: {
                         ...config,
                         channelMode: config.channelMode || "remote",
-                        imageModel: config.imageModel || config.model,
-                        videoModel: config.videoModel || "grok-imagine-video",
+                        imageModel: modelMatchesCapability(config.imageModel, "image") ? config.imageModel : modelMatchesCapability(config.model, "image") ? config.model : imageModels[0] || defaultConfig.imageModel,
+                        videoModel: modelMatchesCapability(config.videoModel, "video") ? config.videoModel : modelMatchesCapability(config.model, "video") ? config.model : videoModels[0] || "grok-imagine-video",
                         textModel: config.textModel || config.model,
                         audioModel: config.audioModel || defaultConfig.audioModel,
                         audioVoice: config.audioVoice || defaultConfig.audioVoice,
@@ -249,10 +253,10 @@ export const useConfigStore = create<ConfigStore>()(
                         videoGenerateAudio: config.videoGenerateAudio || "true",
                         videoWatermark: config.videoWatermark || "false",
                         canvasImageCount: config.canvasImageCount || "3",
-                        imageModels: Array.isArray(persistedConfig.imageModels) ? normalizeModelList(config.imageModels) : filterModelsByCapability(config.models, "image"),
-                        videoModels: Array.isArray(persistedConfig.videoModels) ? normalizeModelList(config.videoModels) : filterModelsByCapability(config.models, "video"),
-                        textModels: Array.isArray(persistedConfig.textModels) ? normalizeModelList(config.textModels) : filterModelsByCapability(config.models, "text"),
-                        audioModels: Array.isArray(persistedConfig.audioModels) ? normalizeModelList(config.audioModels) : filterModelsByCapability(config.models, "audio"),
+                        imageModels,
+                        videoModels,
+                        textModels,
+                        audioModels,
                     },
                 };
             },

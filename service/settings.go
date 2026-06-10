@@ -290,7 +290,7 @@ func isVideoModelName(modelName string) bool {
 
 func isImageModelName(modelName string) bool {
 	name := strings.ToLower(strings.TrimSpace(modelName))
-	return strings.Contains(name, "seedream") || strings.Contains(name, "gpt-image") || strings.Contains(name, "image")
+	return strings.Contains(name, "seedream") || strings.Contains(name, "gpt-image") || strings.Contains(name, "image") || strings.Contains(name, "banana")
 }
 
 func isTextModelName(modelName string) bool {
