@@ -89,16 +89,7 @@ function buildComposerGenerationContext(inputs: NodeGenerationInput[], prompt: s
     const referenceAudios = selectedInputs.map((input) => input.audio).filter((audio): audio is ReferenceAudio => Boolean(audio));
 
     if (!hasToken) {
-        return {
-            prompt,
-            referenceImages: [],
-            referenceVideos: [],
-            referenceAudios: [],
-            textCount: 0,
-            imageCount: 0,
-            videoCount: 0,
-            audioCount: 0,
-        };
+        return buildLabelGenerationContext(inputs, prompt);
     }
 
     return {
@@ -111,6 +102,45 @@ function buildComposerGenerationContext(inputs: NodeGenerationInput[], prompt: s
         videoCount: referenceVideos.length,
         audioCount: referenceAudios.length,
     };
+}
+
+function buildLabelGenerationContext(inputs: NodeGenerationInput[], prompt: string): NodeGenerationContext {
+    const selectedInputs: NodeGenerationInput[] = [];
+    const textBlocks: string[] = [];
+    const counts = { image: 0, video: 0, audio: 0, text: 0 };
+    const selectedCounts = { image: 0, video: 0, audio: 0, text: 0 };
+
+    for (const input of inputs) {
+        const label = generationLabel(input.type, counts[input.type]++);
+        if (!promptIncludesGenerationLabel(prompt, label)) continue;
+        selectedCounts[input.type] += 1;
+        if (input.type === "text") textBlocks.push(`【${label}】\n${input.text || ""}`);
+        else selectedInputs.push(input);
+    }
+
+    const referenceImages = selectedInputs.map((input) => input.image).filter((image): image is ReferenceImage => Boolean(image));
+    const referenceVideos = selectedInputs.map((input) => input.video).filter((video): video is ReferenceVideo => Boolean(video));
+    const referenceAudios = selectedInputs.map((input) => input.audio).filter((audio): audio is ReferenceAudio => Boolean(audio));
+    const nextPrompt = textBlocks.length ? `${prompt.trim()}\n\n${textBlocks.join("\n\n")}` : prompt;
+
+    return {
+        prompt: nextPrompt,
+        referenceImages,
+        referenceVideos,
+        referenceAudios,
+        textCount: selectedCounts.text,
+        imageCount: referenceImages.length,
+        videoCount: referenceVideos.length,
+        audioCount: referenceAudios.length,
+    };
+}
+
+function promptIncludesGenerationLabel(prompt: string, label: string) {
+    return new RegExp(`${escapeRegExp(label)}(?!\\d)`).test(prompt);
+}
+
+function escapeRegExp(value: string) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function buildNodeGenerationInputs(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]): NodeGenerationInput[] {
