@@ -142,9 +142,16 @@ function parseImagePayload(payload: ImageApiResponse) {
 
 function readAxiosError(error: unknown, fallback: string) {
     if (axios.isAxiosError<unknown>(error)) {
+        if (!error.response) return noImageResponseMessage(error.message);
         return errorResponseMessage(error.response?.data) || readStatusError(error.response?.status, fallback);
     }
     return error instanceof Error ? normalizeErrorMessage(error.message) || fallback : fallback;
+}
+
+function noImageResponseMessage(message: string | undefined) {
+    const detail = normalizeErrorMessage(message || "");
+    if (detail && detail !== "Network Error") return `AI 接口没有返回响应：${detail}`;
+    return "AI 接口没有返回响应，请检查本地直连 Base URL、CORS、网络或后端代理状态";
 }
 
 function errorResponseMessage(value: unknown): string {
