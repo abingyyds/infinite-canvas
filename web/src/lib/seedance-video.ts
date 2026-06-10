@@ -71,8 +71,7 @@ export function isSeedanceFastModel(model: string) {
 }
 
 export function isArkPlanBaseUrl(baseUrl: string) {
-    const value = baseUrl.toLowerCase();
-    return value.includes("ark.cn-beijing.volces.com/api/v3") || value.includes("ark.cn-beijing.volces.com/api/plan/v3") || value.includes("/api/v3") || value.includes("/api/plan/v3");
+    return baseUrl.toLowerCase().includes("ark.cn-beijing.volces.com/api/plan/v3") || baseUrl.toLowerCase().includes("/api/plan/v3");
 }
 
 export function normalizeSeedanceResolution(value: string, model = "") {
