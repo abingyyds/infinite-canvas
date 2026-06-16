@@ -96,7 +96,6 @@ func LoginWithGateway(request GatewayLoginRequest) (GatewayLoginSession, error) 
 	if request.Provider == "" && strings.TrimSpace(request.BaseURL) != "" {
 		sources = normalizeGatewaySources([]GatewayLoginSource{
 			{Provider: model.GatewayProviderMain, BaseURL: request.BaseURL, SiteHost: request.SiteHost},
-			{Provider: model.GatewayProviderSite, BaseURL: request.BaseURL, SiteHost: request.SiteHost},
 		})
 	}
 	if len(sources) == 0 {
@@ -111,18 +110,6 @@ func LoginWithGateway(request GatewayLoginRequest) (GatewayLoginSession, error) 
 		}
 		session, account, models, notice, err := prepareGatewayLogin(result)
 		if err != nil {
-			if retrySource, ok := gatewaySiteRetrySource(source, err); ok {
-				retrySession, retryAccount, retryModels, retryNotice, retryErr := loginAndPrepareGatewaySource(retrySource, request.Username, request.Password)
-				if retryErr == nil {
-					return GatewayLoginSession{
-						AuthSession: retrySession,
-						Account:     publicGatewayAccount(retryAccount),
-						Models:      retryModels,
-						Notice:      retryNotice,
-					}, nil
-				}
-				return GatewayLoginSession{}, retryErr
-			}
 			return GatewayLoginSession{}, err
 		}
 		return GatewayLoginSession{
@@ -155,18 +142,6 @@ func LoginWithDefaultGateway(username string, password string) (GatewayLoginSess
 		}
 		session, account, models, notice, err := prepareGatewayLogin(result)
 		if err != nil {
-			if retrySource, ok := gatewaySiteRetrySource(source, err); ok {
-				retrySession, retryAccount, retryModels, retryNotice, retryErr := loginAndPrepareGatewaySource(retrySource, username, password)
-				if retryErr == nil {
-					return GatewayLoginSession{
-						AuthSession: retrySession,
-						Account:     publicGatewayAccount(retryAccount),
-						Models:      retryModels,
-						Notice:      retryNotice,
-					}, true, nil
-				}
-				return GatewayLoginSession{}, false, retryErr
-			}
 			return GatewayLoginSession{}, false, err
 		}
 		return GatewayLoginSession{
@@ -261,20 +236,9 @@ func DefaultGatewayLoginSources() []GatewayLoginSource {
 	raw := []GatewayLoginSource{}
 	raw = append(raw, parseGatewaySources(config.Cfg.GatewayLoginSources)...)
 	if config.Cfg.GatewayBaseURL != "" {
-		raw = append(raw,
-			GatewayLoginSource{Provider: model.GatewayProviderMain, BaseURL: config.Cfg.GatewayBaseURL, SiteHost: config.Cfg.GatewaySiteHost},
-			GatewayLoginSource{Provider: model.GatewayProviderSite, BaseURL: config.Cfg.GatewayBaseURL, SiteHost: config.Cfg.GatewaySiteHost},
-		)
+		raw = append(raw, GatewayLoginSource{Provider: model.GatewayProviderMain, BaseURL: config.Cfg.GatewayBaseURL, SiteHost: config.Cfg.GatewaySiteHost})
 	}
 	return normalizeGatewaySources(raw)
-}
-
-func loginAndPrepareGatewaySource(source GatewayLoginSource, username string, password string) (model.AuthSession, model.GatewayAccount, []string, string, error) {
-	result, err := loginGatewaySource(source, username, password)
-	if err != nil {
-		return model.AuthSession{}, model.GatewayAccount{}, nil, "", err
-	}
-	return prepareGatewayLogin(result)
 }
 
 func loginGatewaySource(source GatewayLoginSource, username string, password string) (gatewayLoginResult, error) {
@@ -391,23 +355,6 @@ func fetchGatewayDistributorInfo(result gatewayLoginResult) (gatewayDistributorI
 		info.SiteHost = firstNonEmpty(anyString(distributor["domain"]), anyString(distributor["host"]))
 	}
 	return info, info.Belongs
-}
-
-func gatewaySiteRetrySource(source GatewayLoginSource, err error) (GatewayLoginSource, bool) {
-	if source.Provider == model.GatewayProviderSite || !isGatewaySiteKeyError(err) {
-		return GatewayLoginSource{}, false
-	}
-	source.Provider = model.GatewayProviderSite
-	source.SiteHost = resolveGatewaySiteHost(gatewayDistributorInfo{}, source.SiteHost)
-	return source, true
-}
-
-func isGatewaySiteKeyError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := err.Error()
-	return strings.Contains(message, "分站用户") || (strings.Contains(message, "分站") && strings.Contains(message, "密钥"))
 }
 
 func prepareGatewayLogin(result gatewayLoginResult) (model.AuthSession, model.GatewayAccount, []string, string, error) {
@@ -812,10 +759,7 @@ func parseGatewaySources(value string) []GatewayLoginSource {
 			}
 			result = append(result, GatewayLoginSource{Provider: model.GatewayProvider(provider), BaseURL: strings.TrimSpace(parts[1]), SiteHost: siteHost})
 		} else if strings.HasPrefix(strings.ToLower(item), "http://") || strings.HasPrefix(strings.ToLower(item), "https://") {
-			result = append(result,
-				GatewayLoginSource{Provider: model.GatewayProviderMain, BaseURL: item},
-				GatewayLoginSource{Provider: model.GatewayProviderSite, BaseURL: item},
-			)
+			result = append(result, GatewayLoginSource{Provider: model.GatewayProviderMain, BaseURL: item})
 		}
 	}
 	return result
