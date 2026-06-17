@@ -288,14 +288,14 @@ func loginMainGateway(baseURL string, siteHost string, username string, password
 		result.Provider = model.GatewayProviderSite
 		result.DistributorID = info.DistributorID
 		result.DistributorSlug = info.Slug
-		result.SiteHost = resolveGatewaySiteHost(info, siteHost)
+		result.SiteHost = resolveGatewaySiteHost(info, siteHost, baseURL)
 	}
 	return result, nil
 }
 
 func loginSiteGateway(baseURL string, siteHost string, username string, password string) (gatewayLoginResult, error) {
 	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
-	siteHost = resolveGatewaySiteHost(gatewayDistributorInfo{}, siteHost)
+	siteHost = resolveGatewaySiteHost(gatewayDistributorInfo{}, siteHost, baseURL)
 	response, err := gatewayJSON(http.MethodPost, apiBaseURL(baseURL)+"/api/dist/user/login", gatewaySiteHeaders(siteHost), body)
 	if err != nil {
 		return gatewayLoginResult{}, err
@@ -374,7 +374,7 @@ func prepareGatewayLogin(result gatewayLoginResult) (model.AuthSession, model.Ga
 	account.DisplayName = result.DisplayName
 	account.DistributorID = result.DistributorID
 	account.DistributorSlug = result.DistributorSlug
-	account.SiteHost = resolveGatewaySiteHost(gatewayDistributorInfo{Slug: result.DistributorSlug, SiteHost: result.SiteHost}, result.SiteHost)
+	account.SiteHost = resolveGatewaySiteHost(gatewayDistributorInfo{DistributorID: result.DistributorID, Slug: result.DistributorSlug, SiteHost: result.SiteHost}, result.SiteHost, result.BaseURL)
 	account.SessionCookie = result.SessionCookie
 	account.UpdatedAt = nowText
 
@@ -632,10 +632,11 @@ func fetchGatewayModels(account model.GatewayAccount) (gatewayFetchResult, error
 }
 
 func fetchSiteGatewayModels(account model.GatewayAccount) ([]string, error) {
-	if normalizeGatewaySiteHost(account.SiteHost) == "" {
+	headers := gatewaySiteHeaders(account.SiteHost)
+	if len(headers) == 0 {
 		return nil, nil
 	}
-	response, err := gatewayJSON(http.MethodGet, apiBaseURL(account.BaseURL)+"/api/dist/site/models", gatewaySiteHeaders(account.SiteHost), nil)
+	response, err := gatewayJSON(http.MethodGet, apiBaseURL(account.BaseURL)+"/api/dist/site/models", headers, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -940,7 +941,7 @@ func gatewaySiteHeaders(siteHost string) map[string]string {
 	}
 }
 
-func resolveGatewaySiteHost(info gatewayDistributorInfo, preferred string) string {
+func resolveGatewaySiteHost(info gatewayDistributorInfo, preferred string, baseURLs ...string) string {
 	if host := normalizeGatewaySiteHost(preferred); host != "" {
 		return host
 	}
@@ -964,8 +965,10 @@ func resolveGatewaySiteHost(info gatewayDistributorInfo, preferred string) strin
 	if suffix := normalizeGatewaySiteHost(config.Cfg.GatewaySiteHostSuffix); suffix != "" {
 		return normalizeGatewaySiteHost(slug + "." + suffix)
 	}
-	if suffix := gatewayHostFromBaseURL(config.Cfg.GatewayPublicBaseURL); suffix != "" {
-		return normalizeGatewaySiteHost(slug + "." + suffix)
+	for _, baseURL := range append([]string{config.Cfg.GatewayPublicBaseURL, config.Cfg.GatewayBaseURL}, baseURLs...) {
+		if suffix := gatewayHostFromBaseURL(baseURL); suffix != "" {
+			return normalizeGatewaySiteHost(slug + "." + suffix)
+		}
 	}
 	return ""
 }
@@ -1049,10 +1052,18 @@ func extractGatewayData(payload map[string]any) map[string]any {
 }
 
 func extractGatewayItems(payload any) []map[string]any {
+	foundArray := false
 	for _, candidate := range gatewayCandidates(payload) {
 		if items, ok := candidate.([]any); ok {
-			return mapGatewayItems(items)
+			foundArray = true
+			mapped := mapGatewayItems(items)
+			if len(mapped) > 0 {
+				return mapped
+			}
 		}
+	}
+	if foundArray {
+		return []map[string]any{}
 	}
 	return []map[string]any{}
 }
@@ -1064,6 +1075,9 @@ func gatewayCandidates(payload any) []any {
 		if data, ok := root["data"].(map[string]any); ok {
 			result = append(result, data["items"], data["models"], data["list"], data["rows"], data["data"])
 		}
+		if data, ok := root["data"].([]any); ok {
+			result = append(result, data)
+		}
 	}
 	return result
 }
@@ -1073,6 +1087,10 @@ func mapGatewayItems(items []any) []map[string]any {
 	for _, item := range items {
 		if mapped, ok := item.(map[string]any); ok {
 			result = append(result, mapped)
+			continue
+		}
+		if value := strings.TrimSpace(anyString(item)); value != "" {
+			result = append(result, map[string]any{"id": value})
 		}
 	}
 	return result
