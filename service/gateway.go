@@ -610,7 +610,12 @@ func isGatewayEndpointMissingError(err error) bool {
 }
 
 func fetchGatewayModels(account model.GatewayAccount) (gatewayFetchResult, error) {
-	if account.Provider == model.GatewayProviderMain {
+	if account.Provider == model.GatewayProviderSite {
+		models, err := fetchSiteGatewayModels(account)
+		if err == nil && len(models) > 0 {
+			return gatewayFetchResult{Models: models, Source: "site"}, nil
+		}
+	} else {
 		models, err := fetchMainSubscribedGatewayModels(account)
 		if err != nil {
 			return gatewayFetchResult{}, err
@@ -626,6 +631,18 @@ func fetchGatewayModels(account model.GatewayAccount) (gatewayFetchResult, error
 	return gatewayFetchResult{Models: models, Source: "gateway"}, nil
 }
 
+func fetchSiteGatewayModels(account model.GatewayAccount) ([]string, error) {
+	if normalizeGatewaySiteHost(account.SiteHost) == "" {
+		return nil, nil
+	}
+	response, err := gatewayJSON(http.MethodGet, apiBaseURL(account.BaseURL)+"/api/dist/site/models", gatewaySiteHeaders(account.SiteHost), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	return decodeGatewayModels(response, "model_name", "modelName", "model", "id", "name")
+}
+
 func fetchMainSubscribedGatewayModels(account model.GatewayAccount) ([]string, error) {
 	response, err := gatewayJSON(http.MethodGet, apiBaseURL(account.BaseURL)+gatewaySubscribedModelsPath(), gatewayCookieHeaders(account), nil)
 	if err != nil {
@@ -635,16 +652,7 @@ func fetchMainSubscribedGatewayModels(account model.GatewayAccount) ([]string, e
 		return nil, err
 	}
 	defer response.Body.Close()
-	var payload any
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return nil, err
-	}
-	rows := extractGatewayItems(payload)
-	models := make([]gatewayModelRow, 0, len(rows))
-	for _, row := range rows {
-		models = append(models, gatewayModelRow{ID: firstNonEmpty(anyString(row["model_name"]), anyString(row["modelName"]), anyString(row["id"]), anyString(row["name"])), Category: anyString(row["category"])})
-	}
-	return normalizeGatewayModels(models), nil
+	return decodeGatewayModels(response, "model_name", "modelName", "id", "name")
 }
 
 func fetchGatewayModelList(baseURL string, apiKey string) ([]string, error) {
@@ -657,6 +665,10 @@ func fetchGatewayModelList(baseURL string, apiKey string) ([]string, error) {
 		return nil, err
 	}
 	defer response.Body.Close()
+	return decodeGatewayModels(response, "id", "model", "name")
+}
+
+func decodeGatewayModels(response *http.Response, names ...string) ([]string, error) {
 	var payload any
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		return nil, err
@@ -664,7 +676,11 @@ func fetchGatewayModelList(baseURL string, apiKey string) ([]string, error) {
 	rows := extractGatewayItems(payload)
 	models := make([]gatewayModelRow, 0, len(rows))
 	for _, row := range rows {
-		models = append(models, gatewayModelRow{ID: firstNonEmpty(anyString(row["id"]), anyString(row["model"]), anyString(row["name"])), Category: anyString(row["category"])})
+		values := make([]string, 0, len(names))
+		for _, name := range names {
+			values = append(values, anyString(row[name]))
+		}
+		models = append(models, gatewayModelRow{ID: firstNonEmpty(values...), Category: anyString(row["category"])})
 	}
 	return normalizeGatewayModels(models), nil
 }
@@ -1044,9 +1060,9 @@ func extractGatewayItems(payload any) []map[string]any {
 func gatewayCandidates(payload any) []any {
 	result := []any{payload}
 	if root, ok := payload.(map[string]any); ok {
-		result = append(result, root["items"], root["data"])
+		result = append(result, root["items"], root["models"], root["list"], root["rows"], root["data"])
 		if data, ok := root["data"].(map[string]any); ok {
-			result = append(result, data["items"], data["data"])
+			result = append(result, data["items"], data["models"], data["list"], data["rows"], data["data"])
 		}
 	}
 	return result
