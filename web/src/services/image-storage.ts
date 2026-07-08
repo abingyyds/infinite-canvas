@@ -33,7 +33,7 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
     const blob = await store.getItem<Blob>(storageKey);
-    if (!blob) return fallback;
+    if (!blob) return fallback.startsWith("blob:") ? "" : fallback;
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
@@ -51,9 +51,17 @@ export async function setImageBlob(storageKey: string, blob: Blob) {
 }
 
 export async function imageToDataUrl(image: { url?: string; dataUrl?: string; storageKey?: string }) {
-    const url = await resolveImageUrl(image.storageKey, image.dataUrl || image.url || "");
+    if (image.storageKey) {
+        const blob = await getImageBlob(image.storageKey);
+        if (blob) return blobToDataUrl(blob);
+    }
+    const url = image.dataUrl || image.url || "";
     if (!url || url.startsWith("data:")) return url;
-    return blobToDataUrl(await (await fetch(url)).blob());
+    try {
+        return blobToDataUrl(await (await fetch(url)).blob());
+    } catch {
+        throw new Error(url.startsWith("blob:") ? "参考图已失效，请重新上传图片" : "参考图读取失败，请换一张图片或重新上传");
+    }
 }
 
 export async function deleteStoredImages(keys: Iterable<string>) {
