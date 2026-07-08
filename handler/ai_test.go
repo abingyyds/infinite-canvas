@@ -34,9 +34,9 @@ func TestResolveAIProxyPathKeepsXAIVideoGenerations(t *testing.T) {
 	}
 }
 
-func TestResolveAIProxyPathFallsBackForNonXAIGrokGateway(t *testing.T) {
+func TestResolveAIProxyPathKeepsVideoGenerationsForNonXAIGrokGateway(t *testing.T) {
 	got := resolveAIProxyPath("https://gateway.example.com/v1", "grok-imagine-video", "/videos/generations")
-	if got != "/videos" {
+	if got != "/videos/generations" {
 		t.Fatalf("path = %q", got)
 	}
 }
@@ -60,22 +60,34 @@ func TestPrepareGrokVideoJSONBodyNormalizesPreviewModel(t *testing.T) {
 	}
 }
 
-func TestPrepareLegacyGrokVideoBodyConvertsOfficialPayload(t *testing.T) {
-	body, contentType, err := prepareLegacyGrokVideoBody([]byte(`{"model":"grok-imagine-video","prompt":"p","duration":6,"aspect_ratio":"9:16","resolution":"720p","reference_images":["https://example.com/a.png"]}`), "application/json")
+func TestPrepareResolvedModelBodyRewritesModel(t *testing.T) {
+	body, contentType, err := prepareResolvedModelBody([]byte(`{"model":"grok-imagine-video-1.5-preview","prompt":"p"}`), "application/json", "grok-imagine-video-1.5")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if contentType != "application/json" {
 		t.Fatalf("contentType = %q", contentType)
 	}
-	var payload map[string]any
+	var payload struct {
+		Model string `json:"model"`
+	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["size"] != "720x1280" || payload["stream"] != false {
-		t.Fatalf("payload = %#v", payload)
+	if payload.Model != "grok-imagine-video-1.5" {
+		t.Fatalf("model = %q", payload.Model)
 	}
-	if refs, ok := payload["input_reference"].([]any); !ok || len(refs) != 1 || refs[0] != "https://example.com/a.png" {
-		t.Fatalf("input_reference = %#v", payload["input_reference"])
+}
+
+func TestModelNameCandidatesGrokPreview(t *testing.T) {
+	got := modelNameCandidates("grok-imagine-video-1.5-preview")
+	want := []string{"grok-imagine-video-1.5", "grok-imagine-video-1.5-preview"}
+	if len(got) != len(want) {
+		t.Fatalf("candidates = %#v", got)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("candidates = %#v", got)
+		}
 	}
 }

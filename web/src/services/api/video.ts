@@ -107,11 +107,12 @@ async function createGrokPreviewVideoTask(config: AiConfig, model: string, promp
     assertGrokPreviewReferences(references, videoReferences, audioReferences);
     const path = videoCreatePath(config, model);
     const official = path === "/videos/generations";
+    const requestModel = official ? normalizeGrokPreviewModel(model) : model;
     const firstFrame = official ? await resolveGrokImageUrl(config, references[0]) : await imageToDataUrl(references[0]);
     if (!firstFrame || (!firstFrame.startsWith("data:image/") && !isPublicMediaUrl(firstFrame))) throw new Error("首帧图片读取失败，请重新上传图片");
     const payload = official
         ? {
-              model: config.channelMode === "remote" ? model : normalizeGrokPreviewModel(model),
+              model: requestModel,
               prompt: prompt.trim(),
               image: firstFrame,
               duration: Number(normalizeGrokPreviewSeconds(config.videoSeconds, model)),
@@ -129,7 +130,7 @@ async function createGrokPreviewVideoTask(config: AiConfig, model: string, promp
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), payload, { headers: aiHeaders(config, "application/json") })).data);
         const id = readVideoTaskId(created);
         if (!id) throw new Error("视频接口没有返回任务 ID");
-        return { id, provider: "openai", model };
+        return { id, provider: "openai", model: requestModel };
     } catch (error) {
         throw new Error(readAxiosError(error, "Grok 1.5 preview 视频任务创建失败"));
     }
