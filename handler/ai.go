@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/basketikun/infinite-canvas/model"
@@ -199,6 +200,9 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 			}
 			_ = json.Unmarshal(body, &payload)
 			if isGrokPreviewVideo(payload.Model) {
+				if proxyPath == "/videos" {
+					return prepareGrokPreviewLegacyVideoJSONBody(body, contentType, payload.Model)
+				}
 				return prepareGrokVideoJSONBody(body, contentType, payload.Model)
 			}
 		}
@@ -220,6 +224,9 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 		return nil, "", err
 	}
 	if isGrokImagineVideo(payload.Model) {
+		if isGrokPreviewVideo(payload.Model) {
+			return prepareGrokPreviewLegacyVideoJSONBody(body, contentType, payload.Model)
+		}
 		return prepareGrokVideoJSONBody(body, contentType, payload.Model)
 	}
 	var buffer bytes.Buffer
@@ -246,19 +253,162 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 }
 
 func prepareGrokVideoJSONBody(body []byte, contentType string, modelName string) ([]byte, string, error) {
-	if !isGrokPreviewVideo(modelName) || modelName == "grok-imagine-video-1.5" {
+	if !isGrokPreviewVideo(modelName) {
 		return body, contentType, nil
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, "", err
 	}
-	payload["model"] = "grok-imagine-video-1.5"
-	normalized, err := json.Marshal(payload)
+	image, err := grokVideoFirstFrameImage(payload)
+	if err != nil {
+		return nil, "", err
+	}
+	normalizedPayload := map[string]any{
+		"model": "grok-imagine-video-1.5",
+		"image": image,
+	}
+	if duration, ok := grokVideoDuration(payload["duration"]); ok {
+		normalizedPayload["duration"] = duration
+	} else if duration, ok := grokVideoDuration(payload["seconds"]); ok {
+		normalizedPayload["duration"] = duration
+	}
+	copyGrokVideoJSONField(normalizedPayload, payload, "aspect_ratio", "aspect_ratio")
+	copyGrokVideoJSONField(normalizedPayload, payload, "resolution", "resolution")
+	copyGrokVideoJSONField(normalizedPayload, payload, "storage_options", "storage_options")
+	copyGrokVideoJSONField(normalizedPayload, payload, "output", "output")
+	copyGrokVideoJSONField(normalizedPayload, payload, "user", "user")
+	normalized, err := json.Marshal(normalizedPayload)
 	if err != nil {
 		return nil, "", err
 	}
 	return normalized, contentType, nil
+}
+
+func prepareGrokPreviewLegacyVideoJSONBody(body []byte, contentType string, modelName string) ([]byte, string, error) {
+	if !isGrokPreviewVideo(modelName) {
+		return body, contentType, nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, "", err
+	}
+	image, err := grokVideoFirstFrameImageString(payload)
+	if err != nil {
+		return nil, "", err
+	}
+	prompt, ok := grokStringField(payload, "prompt")
+	if !ok {
+		prompt = "animate"
+	}
+	normalizedPayload := map[string]any{
+		"model":  strings.TrimSpace(modelName),
+		"prompt": prompt,
+		"image":  image,
+	}
+	if duration, ok := grokVideoDuration(payload["duration"]); ok {
+		normalizedPayload["duration"] = duration
+		normalizedPayload["seconds"] = fmt.Sprint(duration)
+	} else if duration, ok := grokVideoDuration(payload["seconds"]); ok {
+		normalizedPayload["duration"] = duration
+		normalizedPayload["seconds"] = fmt.Sprint(duration)
+	}
+	copyGrokVideoJSONField(normalizedPayload, payload, "aspect_ratio", "aspect_ratio")
+	normalized, err := json.Marshal(normalizedPayload)
+	if err != nil {
+		return nil, "", err
+	}
+	return normalized, contentType, nil
+}
+
+func grokVideoFirstFrameImage(payload map[string]any) (map[string]any, error) {
+	if image, ok := grokVideoImageObject(payload["image"]); ok {
+		return image, nil
+	}
+	images, _ := payload["images"].([]any)
+	for _, item := range images {
+		if image, ok := grokVideoImageObject(item); ok {
+			return image, nil
+		}
+	}
+	return nil, fmt.Errorf("grok 1.5 video requires a first frame image")
+}
+
+func grokVideoFirstFrameImageString(payload map[string]any) (string, error) {
+	image, err := grokVideoFirstFrameImage(payload)
+	if err != nil {
+		return "", err
+	}
+	if url, ok := grokStringField(image, "url"); ok {
+		return url, nil
+	}
+	return "", fmt.Errorf("grok 1.5 video requires a first frame image url")
+}
+
+func grokVideoImageObject(value any) (map[string]any, bool) {
+	switch image := value.(type) {
+	case string:
+		url := strings.TrimSpace(image)
+		if url == "" {
+			return nil, false
+		}
+		return map[string]any{"url": url}, true
+	case map[string]any:
+		if url, ok := grokStringField(image, "url"); ok {
+			return map[string]any{"url": url}, true
+		}
+		if url, ok := grokStringField(image, "image_url"); ok {
+			return map[string]any{"url": url}, true
+		}
+		if fileID, ok := grokStringField(image, "file_id"); ok {
+			return map[string]any{"file_id": fileID}, true
+		}
+		return nil, false
+	default:
+		return nil, false
+	}
+}
+
+func grokStringField(payload map[string]any, key string) (string, bool) {
+	value, _ := payload[key].(string)
+	value = strings.TrimSpace(value)
+	return value, value != ""
+}
+
+func grokVideoDuration(value any) (int, bool) {
+	var seconds int
+	switch duration := value.(type) {
+	case float64:
+		seconds = int(duration)
+	case int:
+		seconds = duration
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(duration))
+		if err != nil {
+			return 0, false
+		}
+		seconds = parsed
+	default:
+		return 0, false
+	}
+	if seconds < 1 {
+		return 1, true
+	}
+	if seconds > 15 {
+		return 15, true
+	}
+	return seconds, true
+}
+
+func copyGrokVideoJSONField(target map[string]any, source map[string]any, targetKey string, sourceKey string) {
+	value, ok := source[sourceKey]
+	if !ok || value == nil {
+		return
+	}
+	if text, ok := value.(string); ok && strings.TrimSpace(text) == "" {
+		return
+	}
+	target[targetKey] = value
 }
 
 func prepareResolvedModelBody(body []byte, contentType string, resolvedModelName string) ([]byte, string, error) {
@@ -402,6 +552,9 @@ func readAIRequestCount(body []byte, contentType string) int {
 var errMissingModel = &aiError{"缺少模型名称"}
 
 func resolveAIProxyPath(baseURL string, modelName string, path string) string {
+	if isGrokPreviewVideo(modelName) && !isOfficialXAIBaseURL(baseURL) && path == "/videos/generations" {
+		return "/videos"
+	}
 	if !isArkSeedanceVideo(baseURL, modelName) {
 		return path
 	}
@@ -412,6 +565,14 @@ func resolveAIProxyPath(baseURL string, modelName string, path string) string {
 		return "/contents/generations/tasks/" + strings.TrimPrefix(path, "/videos/")
 	}
 	return path
+}
+
+func isOfficialXAIBaseURL(baseURL string) bool {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return strings.Contains(strings.ToLower(baseURL), "api.x.ai")
+	}
+	return strings.EqualFold(parsed.Hostname(), "api.x.ai")
 }
 
 func isArkSeedanceVideo(baseURL string, modelName string) bool {
@@ -454,7 +615,7 @@ func selectAIChannel(userID string, modelName string) (model.ModelChannel, strin
 func modelNameCandidates(modelName string) []string {
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "grok-imagine-video-1.5-preview" {
-		return []string{"grok-imagine-video-1.5", modelName}
+		return []string{modelName, "grok-imagine-video-1.5"}
 	}
 	if modelName == "grok-imagine-video-1.5" {
 		return []string{modelName, "grok-imagine-video-1.5-preview"}

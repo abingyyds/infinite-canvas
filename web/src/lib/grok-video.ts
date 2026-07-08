@@ -25,12 +25,10 @@ export function normalizeGrokPreviewModel(model: string) {
 }
 
 export function normalizeGrokPreviewSeconds(value: string, model = "") {
-    const modelSeconds = model.toLowerCase().match(/grok-imagine-video-1\.5(?:-preview)?-(6|10|15)s?$/)?.[1];
+    const modelSeconds = model.toLowerCase().match(/grok-imagine-video-1\.5(?:-preview)?-(1[0-5]|[1-9])s?$/)?.[1];
     if (modelSeconds) return modelSeconds;
     const seconds = Math.floor(Number(value) || 6);
-    if (grokPreviewDurationOptions.includes(seconds as (typeof grokPreviewDurationOptions)[number])) return String(seconds);
-    const nearest = grokPreviewDurationOptions.reduce((best, item) => (Math.abs(item - seconds) < Math.abs(best - seconds) ? item : best), 6);
-    return String(nearest);
+    return String(Math.min(15, Math.max(1, seconds)));
 }
 
 export function normalizeGrokVideoSize(value: string) {
