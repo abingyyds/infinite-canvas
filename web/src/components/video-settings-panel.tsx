@@ -4,14 +4,24 @@ import { type ReactNode } from "react";
 import { Switch } from "antd";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
-import { grokPreviewDurationOptions, isGrokPreviewVideoModel, normalizeGrokPreviewSeconds } from "@/lib/grok-video";
+import { grokPreviewDurationOptions, isGrokImagineVideoModel, isGrokPreviewVideoModel, normalizeGrokPreviewSeconds } from "@/lib/grok-video";
 import { boolConfig, isSeedanceFastModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationOptions, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { modelMatchesCapability, type AiConfig } from "@/stores/use-config-store";
 
-const resolutionOptions = [
-    { value: "720", label: "720p" },
+const generalResolutionOptions = [
+    { value: "360", label: "360p" },
     { value: "480", label: "480p" },
+    { value: "540", label: "540p" },
+    { value: "720", label: "720p" },
+    { value: "1080", label: "1080p" },
+    { value: "1440", label: "1440p" },
+    { value: "2160", label: "2160p" },
+];
+
+const grokResolutionOptions = [
+    { value: "480", label: "480p" },
+    { value: "720", label: "720p" },
 ];
 
 const sizeOptions = [
@@ -43,7 +53,9 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
     const seconds = isGrokPreview ? normalizeGrokPreviewSeconds(config.videoSeconds, model) : config.videoSeconds || "6";
     const size = normalizeVideoSizeValue(config.size);
     const dimensions = readSizeDimensions(size);
-    const resolution = normalizeVideoResolutionValue(config.vquality);
+    const currentResolutionOptions = videoResolutionOptionsForModel(model);
+    const resolution = normalizeVideoResolutionForModel(config.vquality, model);
+    const showResolutionInput = !isGrokImagineVideoModel(model);
     const currentSizeOptions = isGrokPreview ? sizeOptions.filter((item) => item.value !== "auto") : sizeOptions;
     const currentSecondOptions = isGrokPreview ? grokPreviewDurationOptions : secondOptions;
     const maxSeconds = isGrokPreview ? 15 : 20;
@@ -59,12 +71,12 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 {isGrokPreview ? null : (
                     <SettingGroup title="清晰度" color={theme.node.muted}>
                         <div className="grid grid-cols-3 gap-2.5">
-                            {resolutionOptions.map((item) => (
+                            {currentResolutionOptions.map((item) => (
                                 <OptionPill key={item.value} selected={resolution === item.value} theme={theme} onClick={() => onConfigChange("vquality", item.value)}>
                                     {item.label}
                                 </OptionPill>
                             ))}
-                            <ResolutionInput value={resolution} theme={theme} onChange={(value) => onConfigChange("vquality", value)} />
+                            {showResolutionInput ? <ResolutionInput value={resolution} theme={theme} onChange={(value) => onConfigChange("vquality", value)} /> : null}
                         </div>
                     </SettingGroup>
                 )}
@@ -182,6 +194,16 @@ export function videoResolutionLabel(value: string) {
     return `${normalizeVideoResolutionValue(value)}p`;
 }
 
+function videoResolutionOptionsForModel(model: string) {
+    return isGrokImagineVideoModel(model) ? grokResolutionOptions : generalResolutionOptions;
+}
+
+function normalizeVideoResolutionForModel(value: string, model: string) {
+    const resolution = normalizeVideoResolutionValue(value);
+    if (!isGrokImagineVideoModel(model)) return resolution;
+    return resolution === "480" ? "480" : "720";
+}
+
 export function videoSizeLabel(value: string) {
     const ratio = normalizeSeedanceRatio(value);
     if (value === "adaptive" || value === "auto") return "自适应";
@@ -202,9 +224,14 @@ export function normalizeVideoSizeValue(value: string) {
 }
 
 export function normalizeVideoResolutionValue(value: string) {
-    if (value === "480p" || value === "low") return "480";
-    if (value === "720p" || value === "auto" || value === "high" || value === "medium") return "720";
-    return value.replace(/p$/i, "") || "720";
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized === "480p" || normalized === "low") return "480";
+    if (normalized === "720p" || normalized === "auto" || normalized === "high" || normalized === "medium" || normalized === "hd") return "720";
+    if (normalized === "fhd") return "1080";
+    if (normalized === "2k" || normalized === "qhd") return "1440";
+    if (normalized === "4k" || normalized === "uhd") return "2160";
+    const resolution = normalized.replace(/p$/i, "");
+    return /^\d+$/.test(resolution) ? resolution : "720";
 }
 
 function OptionPill({ selected, disabled = false, theme, onClick, children }: { selected: boolean; disabled?: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {

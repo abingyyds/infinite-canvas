@@ -16,11 +16,15 @@ type VideoResponse = {
     task_id?: string;
     video_id?: string;
     status?: string;
+    progress?: number;
     error?: { message?: string };
     video?: { url?: string; video_url?: string; duration?: number };
     url?: string;
+    videoUrl?: string;
     video_url?: string;
-    content?: { url?: string; video_url?: string } | null;
+    result_url?: string;
+    local_preview_url?: string;
+    content?: string | { url?: string; video_url?: string } | null;
     output?: { url?: string; video_url?: string; videos?: Array<{ url?: string; video_url?: string }> } | null;
 };
 type ApiVideoResponse = VideoResponse | { code?: number; data?: VideoResponse | null; msg?: string };
@@ -306,7 +310,7 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask):
         const videoUrl = readVideoUrl(video);
         if (videoUrl && (!status || isCompletedVideoStatus(status))) {
             refreshRemoteUser(config);
-            return { status: "completed", result: await videoResultFromUrl(videoUrl) };
+            return { status: "completed", result: await videoResultFromUrl(videoUrl, config) };
         }
         if (isCompletedVideoStatus(status)) {
             const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${task.id}/content`), { headers: aiHeaders(config), params: config.channelMode === "remote" ? { model: task.model } : undefined, responseType: "blob" });
@@ -449,14 +453,20 @@ async function uploadReferenceMedia(file: File) {
     return payload.url;
 }
 
-async function videoResultFromUrl(url: string): Promise<VideoGenerationResult> {
+async function videoResultFromUrl(url: string, config?: AiConfig): Promise<VideoGenerationResult> {
     try {
-        const response = await axios.get<Blob>(url, { responseType: "blob" });
+        const headers = config && shouldSendVideoContentAuth(config, url) ? aiHeaders(config) : undefined;
+        const response = await axios.get<Blob>(url, { responseType: "blob", ...(headers ? { headers } : {}) });
         await assertVideoBlob(response.data);
         return { blob: response.data };
     } catch {
         return { url, mimeType: "video/mp4" };
     }
+}
+
+function shouldSendVideoContentAuth(config: AiConfig, url: string) {
+    const videosBaseUrl = aiApiUrl(config, "/videos/");
+    return url.startsWith(videosBaseUrl) && /\/content(?:\?|$)/.test(url);
 }
 
 function assertVideoConfig(config: AiConfig, model: string) {
@@ -478,15 +488,20 @@ function normalizeVideoSize(value: string) {
 }
 
 function normalizeVideoResolution(value: string) {
-    if (value === "low") return "480p";
-    if (value === "auto" || value === "high" || value === "medium") return "720p";
-    const resolution = value.replace(/p$/i, "") || "720";
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized === "low") return "480p";
+    if (normalized === "auto" || normalized === "high" || normalized === "medium" || normalized === "hd") return "720p";
+    if (normalized === "fhd") return "1080p";
+    if (normalized === "2k" || normalized === "qhd") return "1440p";
+    if (normalized === "4k" || normalized === "uhd") return "2160p";
+    const resolution = normalized.replace(/p$/i, "") || "720";
+    if (!/^\d+$/.test(resolution)) return "720p";
     return `${resolution}p`;
 }
 
 function normalizeGrokVideoResolution(value: string) {
     const resolution = normalizeVideoResolution(value);
-    return resolution === "1080p" ? "720p" : resolution;
+    return resolution === "480p" ? "480p" : "720p";
 }
 
 function buildGrokVideoPromptText(prompt: string, references: ReferenceImage[]) {
@@ -530,7 +545,13 @@ function readVideoTaskId(payload: VideoResponse) {
 }
 
 function readVideoUrl(payload: VideoResponse) {
-    return payload.video?.url || payload.video?.video_url || payload.url || payload.video_url || payload.content?.video_url || payload.content?.url || payload.output?.video_url || payload.output?.url || payload.output?.videos?.[0]?.url || payload.output?.videos?.[0]?.video_url || "";
+    return payload.video?.url || payload.video?.video_url || payload.videoUrl || payload.video_url || payload.result_url || payload.local_preview_url || payload.url || readContentVideoUrl(payload.content) || payload.output?.video_url || payload.output?.url || payload.output?.videos?.[0]?.url || payload.output?.videos?.[0]?.video_url || "";
+}
+
+function readContentVideoUrl(content: VideoResponse["content"]) {
+    if (!content) return "";
+    if (typeof content === "string") return content;
+    return content.video_url || content.url || "";
 }
 
 function isCompletedVideoStatus(status: string) {
