@@ -478,15 +478,20 @@ function normalizeVideoSize(value: string) {
 }
 
 function normalizeVideoResolution(value: string) {
-    if (value === "low") return "480p";
-    if (value === "auto" || value === "high" || value === "medium") return "720p";
-    const resolution = value.replace(/p$/i, "") || "720";
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized === "low") return "480p";
+    if (normalized === "auto" || normalized === "high" || normalized === "medium" || normalized === "hd") return "720p";
+    if (normalized === "fhd") return "1080p";
+    if (normalized === "2k" || normalized === "qhd") return "1440p";
+    if (normalized === "4k" || normalized === "uhd") return "2160p";
+    const resolution = normalized.replace(/p$/i, "") || "720";
+    if (!/^\d+$/.test(resolution)) return "720p";
     return `${resolution}p`;
 }
 
 function normalizeGrokVideoResolution(value: string) {
     const resolution = normalizeVideoResolution(value);
-    return resolution === "1080p" ? "720p" : resolution;
+    return resolution === "480p" ? "480p" : "720p";
 }
 
 function buildGrokVideoPromptText(prompt: string, references: ReferenceImage[]) {

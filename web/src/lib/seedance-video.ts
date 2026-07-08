@@ -82,9 +82,11 @@ export function normalizeSeedanceResolution(value: string, model = "") {
 }
 
 export function normalizeResolutionToken(value: string) {
-    if (value === "low") return "480p";
-    if (value === "auto" || value === "high" || value === "medium") return "720p";
-    const resolution = String(value || "").replace(/p$/i, "") || "720";
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized === "low") return "480p";
+    if (normalized === "auto" || normalized === "high" || normalized === "medium" || normalized === "hd") return "720p";
+    if (normalized === "fhd") return "1080p";
+    const resolution = normalized.replace(/p$/i, "") || "720";
     return `${resolution}p`;
 }
 

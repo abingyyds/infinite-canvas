@@ -7,6 +7,7 @@
 + [修复] 后台 Grok 1.5 视频创建和轮询兼容 `grok-imagine-video-1.5` 与 `grok-imagine-video-1.5-preview` 两种模型名。
 + [修复] Grok 1.5 preview 首帧生视频请求不再携带 prompt、reference、messages 或 stream，并支持 1-15 秒自定义时长。
 + [修复] Orbitlink 等非 xAI 官方兼容网关的 Grok 1.5 preview 会按 `/v1/videos`、首帧字符串和非空 prompt 兜底创建任务。
++ [优化] 视频设置清晰度按模型展示更多规格，通用视频模型支持 360p、480p、540p、720p、1080p、1440p 和 2160p 快捷选择。
 
 ## v0.2.5 - 2026-06-08
 
