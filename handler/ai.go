@@ -38,6 +38,10 @@ func AIVideos(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/videos")
 }
 
+func AIVideoGenerations(w http.ResponseWriter, r *http.Request) {
+	proxyAIRequest(w, r, "/videos/generations")
+}
+
 func AIVideo(w http.ResponseWriter, r *http.Request, id string) {
 	proxyAIGetRequest(w, r, "/videos/"+id)
 }
@@ -96,16 +100,16 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		credits = 0
 	}
 	credits *= readAIRequestCount(body, contentType)
-	path = resolveAIProxyPath(channel.BaseURL, modelName, path)
-	body, contentType, err = prepareAIProxyBody(path, body, contentType)
+	proxyPath := resolveAIProxyPath(channel.BaseURL, modelName, path)
+	body, contentType, err = prepareAIProxyBody(path, proxyPath, body, contentType)
 	if err != nil {
-		log.Printf("AI proxy prepare body failed: path=%s err=%v", path, err)
+		log.Printf("AI proxy prepare body failed: path=%s proxyPath=%s err=%v", path, proxyPath, err)
 		Fail(w, "AI 接口请求失败")
 		return
 	}
-	request, err := http.NewRequest(http.MethodPost, service.BuildModelChannelURL(channel, path), bytes.NewReader(body))
+	request, err := http.NewRequest(http.MethodPost, service.BuildModelChannelURL(channel, proxyPath), bytes.NewReader(body))
 	if err != nil {
-		log.Printf("AI proxy build request failed: url=%s err=%v", service.BuildModelChannelURL(channel, path), err)
+		log.Printf("AI proxy build request failed: url=%s err=%v", service.BuildModelChannelURL(channel, proxyPath), err)
 		Fail(w, "AI 接口请求失败")
 		return
 	}
@@ -114,12 +118,12 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
-	if err := service.ConsumeUserCredits(user.ID, modelName, credits, path); err != nil {
+	if err := service.ConsumeUserCredits(user.ID, modelName, credits, proxyPath); err != nil {
 		FailError(w, err)
 		return
 	}
-	copyAIResponse(w, request, modelName, path, func() {
-		if err := service.RefundUserCredits(user.ID, modelName, credits, path); err != nil {
+	copyAIResponse(w, request, modelName, proxyPath, func() {
+		if err := service.RefundUserCredits(user.ID, modelName, credits, proxyPath); err != nil {
 			log.Printf("AI proxy refund credits failed: user=%s model=%s credits=%d err=%v", user.ID, modelName, credits, err)
 		}
 	})
@@ -181,8 +185,23 @@ func readAIRequest(r *http.Request) ([]byte, string, string, error) {
 	return body, contentType, modelName, nil
 }
 
-func prepareAIProxyBody(path string, body []byte, contentType string) ([]byte, string, error) {
-	if path != "/videos" || !strings.HasPrefix(contentType, "application/json") {
+func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType string) ([]byte, string, error) {
+	if path == "/videos/generations" {
+		if proxyPath == "/videos" {
+			return prepareLegacyGrokVideoBody(body, contentType)
+		}
+		if strings.HasPrefix(contentType, "application/json") {
+			var payload struct {
+				Model string `json:"model"`
+			}
+			_ = json.Unmarshal(body, &payload)
+			if isGrokPreviewVideo(payload.Model) {
+				return prepareGrokVideoJSONBody(body, contentType, payload.Model)
+			}
+		}
+		return body, contentType, nil
+	}
+	if proxyPath != "/videos" || !strings.HasPrefix(contentType, "application/json") {
 		return body, contentType, nil
 	}
 	var payload struct {
@@ -224,19 +243,94 @@ func prepareAIProxyBody(path string, body []byte, contentType string) ([]byte, s
 }
 
 func prepareGrokVideoJSONBody(body []byte, contentType string, modelName string) ([]byte, string, error) {
-	if !isGrokPreviewVideo(modelName) || modelName == "grok-imagine-video-1.5-preview" {
+	if !isGrokPreviewVideo(modelName) || modelName == "grok-imagine-video-1.5" {
 		return body, contentType, nil
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, "", err
 	}
-	payload["model"] = "grok-imagine-video-1.5-preview"
+	payload["model"] = "grok-imagine-video-1.5"
 	normalized, err := json.Marshal(payload)
 	if err != nil {
 		return nil, "", err
 	}
 	return normalized, contentType, nil
+}
+
+func prepareLegacyGrokVideoBody(body []byte, contentType string) ([]byte, string, error) {
+	if !strings.HasPrefix(contentType, "application/json") {
+		return body, contentType, nil
+	}
+	var payload struct {
+		Model           string   `json:"model"`
+		Prompt          string   `json:"prompt"`
+		Duration        int      `json:"duration"`
+		AspectRatio     string   `json:"aspect_ratio"`
+		Resolution      string   `json:"resolution"`
+		Image           string   `json:"image"`
+		ReferenceImages []string `json:"reference_images"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, "", err
+	}
+	if isGrokPreviewVideo(payload.Model) {
+		legacy := map[string]any{
+			"model":   payload.Model,
+			"prompt":  payload.Prompt,
+			"seconds": fmt.Sprintf("%d", payload.Duration),
+			"size":    grokAspectRatioSize(payload.AspectRatio),
+			"images":  []string{payload.Image, payload.Image},
+		}
+		normalized, err := json.Marshal(legacy)
+		return normalized, contentType, err
+	}
+	size := grokAspectRatioSize(payload.AspectRatio)
+	resolution := payload.Resolution
+	if resolution == "" {
+		resolution = "720p"
+	}
+	videoConfig := map[string]any{
+		"seconds":         payload.Duration,
+		"duration":        payload.Duration,
+		"size":            size,
+		"aspect_ratio":    payload.AspectRatio,
+		"resolution":      resolution,
+		"resolution_name": resolution,
+	}
+	legacy := map[string]any{
+		"model":        payload.Model,
+		"stream":       false,
+		"messages":     []map[string]any{{"role": "user", "content": []map[string]string{{"type": "text", "text": payload.Prompt}}}},
+		"duration":     payload.Duration,
+		"seconds":      payload.Duration,
+		"aspect_ratio": payload.AspectRatio,
+		"size":         size,
+		"video_config": videoConfig,
+		"metadata":     map[string]any{"video_config": videoConfig},
+	}
+	if len(payload.ReferenceImages) > 0 {
+		legacy["input_reference"] = payload.ReferenceImages
+	}
+	normalized, err := json.Marshal(legacy)
+	return normalized, contentType, err
+}
+
+func grokAspectRatioSize(aspectRatio string) string {
+	switch strings.TrimSpace(aspectRatio) {
+	case "9:16":
+		return "720x1280"
+	case "1:1":
+		return "1024x1024"
+	case "4:3":
+		return "960x720"
+	case "3:4":
+		return "720x960"
+	case "21:9":
+		return "1280x544"
+	default:
+		return "1280x720"
+	}
 }
 
 func writeMultipartField(writer *multipart.Writer, key string, value string) {
@@ -313,7 +407,7 @@ func isGrokImagineVideo(modelName string) bool {
 }
 
 func isGrokPreviewVideo(modelName string) bool {
-	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "grok-imagine-video-1.5-preview")
+	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "grok-imagine-video-1.5")
 }
 
 func readMultipartModel(body []byte, contentType string) string {
@@ -364,6 +458,9 @@ func readAIRequestCount(body []byte, contentType string) int {
 var errMissingModel = &aiError{"缺少模型名称"}
 
 func resolveAIProxyPath(baseURL string, modelName string, path string) string {
+	if path == "/videos/generations" && isGrokImagineVideo(modelName) && !isXAIChannel(baseURL) {
+		return "/videos"
+	}
 	if !isArkSeedanceVideo(baseURL, modelName) {
 		return path
 	}
@@ -374,6 +471,14 @@ func resolveAIProxyPath(baseURL string, modelName string, path string) string {
 		return "/contents/generations/tasks/" + strings.TrimPrefix(path, "/videos/")
 	}
 	return path
+}
+
+func isXAIChannel(baseURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return strings.Contains(strings.ToLower(baseURL), "x.ai")
+	}
+	return strings.HasSuffix(strings.ToLower(parsed.Hostname()), "x.ai")
 }
 
 func isArkSeedanceVideo(baseURL string, modelName string) bool {

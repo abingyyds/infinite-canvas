@@ -52,6 +52,7 @@ description: 当前画布节点的主要用途与操作流程
 - 从文本、图片或配置节点创建视频生成时，会在右侧生成新的视频节点并自动连接。
 - 生成配置节点的视频模式会读取上游文本作为 prompt，读取上游图片作为参考图，读取上游视频作为参考视频，并在输入预览里显示参考视频。
 - 视频生成接口支持 OpenAI 风格的 `POST /v1/videos`、`GET /v1/videos/{id}` 和 `GET /v1/videos/{id}/content`。
+- 使用 xAI Grok Imagine Video 时，Base URL 配置为 `https://api.x.ai`，模型名使用 `grok-imagine-video` 或 `grok-imagine-video-1.5`；系统会改用 `POST /v1/videos/generations` 创建任务，并继续轮询 `GET /v1/videos/{id}`。旧的 `grok-imagine-video-1.5-preview` 会自动按官方模型名请求。
 - 使用火山方舟 Agent Plan / Seedance 2.0 时，Base URL 配置为 `https://ark.cn-beijing.volces.com/api/v3`，模型名使用 `doubao-seedance` 对应模型；如果你的上游或反代明确暴露 `/api/plan/v3`，系统也会识别。系统会改用 `POST /contents/generations/tasks` 创建异步任务，并轮询 `GET /contents/generations/tasks/{id}`。SubRouter / OpenAI 兼容网关里的 `seedance-2-*` 且模型标记为 `openai-video` 时，会继续走 `/v1/videos`。
 - Agent Plan / Seedance 任务接口当前未提供 OpenAI `/models` 模型列表接口，后台不会伪造模型列表；请手动填写 `doubao-seedance-2.0` 或文档列出的其他可用模型。
 - Seedance 参考视频必须是公网可访问 URL，或由本项目后端在配置 `PUBLIC_BASE_URL` 后上传并暴露的参考素材 URL。本地/内网地址无法被火山服务器拉取。

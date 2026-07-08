@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-+ [优化] 适配 Grok Imagine Video 非流请求和 1.5 preview 首帧视频格式。
++ [优化] Grok Imagine Video 改为适配 xAI 官方 `/v1/videos/generations` 创建任务，并兼容 1.5 preview 旧模型名。
 
 ## v0.2.5 - 2026-06-08
 

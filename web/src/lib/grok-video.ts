@@ -1,3 +1,4 @@
+export const GROK_IMAGE_VIDEO_MODEL = "grok-imagine-video-1.5";
 export const GROK_PREVIEW_VIDEO_MODEL = "grok-imagine-video-1.5-preview";
 
 export const grokPreviewDurationOptions = [6, 10, 15] as const;
@@ -16,15 +17,15 @@ export function isGrokImagineVideoModel(model: string) {
 }
 
 export function isGrokPreviewVideoModel(model: string) {
-    return model.toLowerCase().includes(GROK_PREVIEW_VIDEO_MODEL);
+    return model.toLowerCase().includes("grok-imagine-video-1.5");
 }
 
 export function normalizeGrokPreviewModel(model: string) {
-    return isGrokPreviewVideoModel(model) ? GROK_PREVIEW_VIDEO_MODEL : model.trim();
+    return isGrokPreviewVideoModel(model) ? GROK_IMAGE_VIDEO_MODEL : model.trim();
 }
 
 export function normalizeGrokPreviewSeconds(value: string, model = "") {
-    const modelSeconds = model.toLowerCase().match(/grok-imagine-video-1\.5-preview-(6|10|15)s?$/)?.[1];
+    const modelSeconds = model.toLowerCase().match(/grok-imagine-video-1\.5(?:-preview)?-(6|10|15)s?$/)?.[1];
     if (modelSeconds) return modelSeconds;
     const seconds = Math.floor(Number(value) || 6);
     if (grokPreviewDurationOptions.includes(seconds as (typeof grokPreviewDurationOptions)[number])) return String(seconds);

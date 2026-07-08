@@ -1,6 +1,6 @@
 import axios from "axios";
 
-import { GROK_PREVIEW_VIDEO_MODEL, isGrokImagineVideoModel, isGrokPreviewVideoModel, normalizeGrokPreviewModel, normalizeGrokPreviewSeconds, normalizeGrokPreviewVideoSize, normalizeGrokVideoAspectRatio, normalizeGrokVideoSize } from "@/lib/grok-video";
+import { GROK_IMAGE_VIDEO_MODEL, isGrokImagineVideoModel, isGrokPreviewVideoModel, normalizeGrokPreviewModel, normalizeGrokPreviewSeconds, normalizeGrokPreviewVideoSize, normalizeGrokVideoAspectRatio, normalizeGrokVideoSize } from "@/lib/grok-video";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
@@ -39,6 +39,10 @@ export type VideoGenerationTaskState = { status: "pending" } | { status: "comple
 
 function aiApiUrl(config: AiConfig, path: string) {
     return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
+}
+
+function videoCreatePath(config: AiConfig, model: string) {
+    return isGrokImagineVideoModel(model) && (config.channelMode === "remote" || isXAIBaseUrl(config.baseUrl)) ? "/videos/generations" : "/videos";
 }
 
 function aiHeaders(config: AiConfig, contentType?: string) {
@@ -83,7 +87,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
         throw new Error("当前视频接口只支持参考图；参考视频或参考音频请切换到 Grok Imagine Video、Seedance 2.0 / 火山 Agent Plan 模型，或移除参考素材");
     }
     if (isGrokPreviewVideoModel(model)) return createGrokPreviewVideoTask(config, model, prompt, references, videoReferences, audioReferences);
-    if (isGrokVideo) return createGrokTextVideoTask(config, model, prompt, references, videoReferences, audioReferences);
+    if (isGrokVideo) return createGrokVideoTask(config, model, prompt, references, videoReferences, audioReferences);
     if (isOpenAIVideoJson) return createReferenceJsonVideoTask(config, model, prompt, references, videoReferences, audioReferences);
     return createOpenAIVideoTask(config, model, prompt, references, [], []);
 }
@@ -101,18 +105,28 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
 
 async function createGrokPreviewVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
     assertGrokPreviewReferences(references, videoReferences, audioReferences);
-    const firstFrame = await imageToDataUrl(references[0]);
-    if (!firstFrame?.startsWith("data:image/")) throw new Error("首帧图片读取失败，请重新上传图片");
-    const payload = {
-        model: config.channelMode === "remote" ? model : normalizeGrokPreviewModel(model),
-        prompt: prompt.trim(),
-        images: [firstFrame, firstFrame],
-        seconds: normalizeGrokPreviewSeconds(config.videoSeconds, model),
-        size: normalizeGrokPreviewVideoSize(config.size),
-    };
+    const path = videoCreatePath(config, model);
+    const official = path === "/videos/generations";
+    const firstFrame = official ? await resolveGrokImageUrl(config, references[0]) : await imageToDataUrl(references[0]);
+    if (!firstFrame || (!firstFrame.startsWith("data:image/") && !isPublicMediaUrl(firstFrame))) throw new Error("首帧图片读取失败，请重新上传图片");
+    const payload = official
+        ? {
+              model: config.channelMode === "remote" ? model : normalizeGrokPreviewModel(model),
+              prompt: prompt.trim(),
+              image: firstFrame,
+              duration: Number(normalizeGrokPreviewSeconds(config.videoSeconds, model)),
+              aspect_ratio: normalizeGrokVideoAspectRatio(config.size || normalizeGrokPreviewVideoSize(config.size)),
+          }
+        : {
+              model,
+              prompt: prompt.trim(),
+              images: [firstFrame, firstFrame],
+              seconds: normalizeGrokPreviewSeconds(config.videoSeconds, model),
+              size: normalizeGrokPreviewVideoSize(config.size),
+          };
 
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), payload, { headers: aiHeaders(config, "application/json") })).data);
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), payload, { headers: aiHeaders(config, "application/json") })).data);
         const id = readVideoTaskId(created);
         if (!id) throw new Error("视频接口没有返回任务 ID");
         return { id, provider: "openai", model };
@@ -121,8 +135,32 @@ async function createGrokPreviewVideoTask(config: AiConfig, model: string, promp
     }
 }
 
-async function createGrokTextVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
-    assertGrokTextVideoReferences(references, videoReferences, audioReferences);
+async function createGrokVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
+    const path = videoCreatePath(config, model);
+    if (path !== "/videos/generations") return createLegacyGrokVideoTask(config, model, prompt, references, videoReferences, audioReferences);
+    assertGrokVideoReferences(videoReferences, audioReferences);
+    const seconds = Number(normalizeVideoSeconds(config.videoSeconds));
+    const payload = {
+        model,
+        prompt: buildGrokVideoPromptText(prompt, references),
+        duration: seconds,
+        aspect_ratio: normalizeGrokVideoAspectRatio(config.size || normalizeGrokVideoSize(config.size)),
+        resolution: normalizeGrokVideoResolution(config.vquality),
+        ...(references.length ? { reference_images: await buildGrokImageReferences(config, references) } : {}),
+    };
+
+    try {
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), payload, { headers: aiHeaders(config, "application/json") })).data);
+        const id = readVideoTaskId(created);
+        if (!id) throw new Error("视频接口没有返回任务 ID");
+        return { id, provider: "openai", model };
+    } catch (error) {
+        throw new Error(readAxiosError(error, "Grok 视频任务创建失败"));
+    }
+}
+
+async function createLegacyGrokVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
+    assertGrokLegacyReferences(references, videoReferences, audioReferences);
     const seconds = Number(normalizeVideoSeconds(config.videoSeconds));
     const size = normalizeGrokVideoSize(config.size);
     const aspectRatio = normalizeGrokVideoAspectRatio(config.size || size);
@@ -158,7 +196,7 @@ async function createGrokTextVideoTask(config: AiConfig, model: string, prompt: 
 }
 
 async function createReferenceJsonVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
-    const inputReference = await buildGrokInputReferences(config, references, videoReferences, audioReferences);
+    const inputReference = await buildReferenceInputUrls(config, references, videoReferences, audioReferences);
     const size = normalizeVideoSize(config.size);
     const payload = {
         model,
@@ -236,6 +274,10 @@ async function resolveGrokImageUrl(config: AiConfig, image: ReferenceImage) {
     if (!dataUrl?.startsWith("data:image/")) throw new Error("参考图读取失败，请换一张图片或重新上传");
     if (config.channelMode === "remote") return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }));
     return dataUrl;
+}
+
+async function buildGrokImageReferences(config: AiConfig, references: ReferenceImage[]) {
+    return Promise.all(references.slice(0, 4).map((image) => resolveGrokImageUrl(config, image)));
 }
 
 async function resolveGrokVideoUrl(config: AiConfig, video: ReferenceVideo) {
@@ -439,6 +481,11 @@ function normalizeVideoResolution(value: string) {
     return `${resolution}p`;
 }
 
+function normalizeGrokVideoResolution(value: string) {
+    const resolution = normalizeVideoResolution(value);
+    return resolution === "1080p" ? "720p" : resolution;
+}
+
 function buildGrokVideoPromptText(prompt: string, references: ReferenceImage[]) {
     const text = prompt.trim();
     if (!references.length) return text;
@@ -452,9 +499,14 @@ function assertGrokPreviewReferences(references: ReferenceImage[], videoReferenc
     if (references.length > 1) throw new Error("Grok 1.5 preview 只支持 1 张首帧图片，请只保留一张参考图");
 }
 
-function assertGrokTextVideoReferences(references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
+function assertGrokVideoReferences(videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
+    if (!videoReferences.length && !audioReferences.length) return;
+    throw new Error("xAI Grok Imagine Video 官方接口当前只支持文本和参考图片；参考视频或参考音频请切换到 Seedance 2.0 / 火山 Agent Plan 模型");
+}
+
+function assertGrokLegacyReferences(references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
     if (!references.length && !videoReferences.length && !audioReferences.length) return;
-    throw new Error("grok-imagine-video 当前按非流文生视频接口发送，不支持参考素材；首帧生视频请切换到 Grok 1.5 preview 模型");
+    throw new Error("当前 Grok 兼容网关按非流文生视频接口发送，不支持参考素材；xAI 官方参考图视频请把 Base URL 配置为 https://api.x.ai");
 }
 
 function isOpenAICompatibleSeedanceVideoModel(model: string) {
@@ -540,7 +592,7 @@ function normalizeVideoErrorMessage(message: string) {
         text = trimErrorText(next);
     }
     if (/requires an input image|text-to-video is not supported/i.test(text)) {
-        return `${GROK_PREVIEW_VIDEO_MODEL} 只支持首帧生视频，请先添加 1 张首帧图片；纯文本生视频请切换到 grok-imagine-video。`;
+        return `${GROK_IMAGE_VIDEO_MODEL} 只支持首帧生视频，请先添加 1 张首帧图片；纯文本生视频请切换到 grok-imagine-video。`;
     }
     return text;
 }
@@ -560,7 +612,7 @@ function trimErrorText(value: string) {
     return String(value || "").trim();
 }
 
-async function buildGrokInputReferences(config: AiConfig, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
+async function buildReferenceInputUrls(config: AiConfig, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
     return [
         ...(await Promise.all(references.slice(0, 7).map((image) => resolveGrokImageUrl(config, image)))),
         ...(await Promise.all(videoReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.videos).map((video) => resolveGrokVideoUrl(config, video)))),
@@ -579,6 +631,14 @@ function blobToDataUrl(blob: Blob, errorMessage = "读取参考视频失败") {
 
 function isPublicMediaUrl(value: string) {
     return /^https?:\/\//i.test(value || "");
+}
+
+function isXAIBaseUrl(baseUrl: string) {
+    try {
+        return new URL(baseUrl).hostname.toLowerCase().endsWith("x.ai");
+    } catch {
+        return /(^|\.)x\.ai(?:\/|$)/i.test(baseUrl);
+    }
 }
 
 function delay(ms: number) {
