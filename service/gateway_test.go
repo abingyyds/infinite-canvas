@@ -46,6 +46,18 @@ func TestRuntimeGatewayModelBaseURLKeepsV1ForOpenAICompatibleSeedance(t *testing
 	}
 }
 
+func TestRuntimeGatewayModelBaseURLNormalizesOpenAIVideoPath(t *testing.T) {
+	oldConfig := config.Cfg
+	t.Cleanup(func() { config.Cfg = oldConfig })
+	config.Cfg = config.Config{}
+
+	got := runtimeGatewayModelBaseURL("https://ai.orbitlink.me/v1/videos/generations", "grok-imagine-video-1.5-preview")
+	want := "https://ai.orbitlink.me/v1"
+	if got != want {
+		t.Fatalf("runtimeGatewayModelBaseURL = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeGatewayModelBaseURLRewritesPublicV1ForSeedance(t *testing.T) {
 	oldConfig := config.Cfg
 	t.Cleanup(func() { config.Cfg = oldConfig })

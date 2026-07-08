@@ -107,6 +107,21 @@ func TestPrepareGrokPreviewLegacyVideoJSONBodyUsesImageString(t *testing.T) {
 	}
 }
 
+func TestPrepareGrokPreviewLegacyVideoJSONBodyUsesPreviewModelForLegacyGateway(t *testing.T) {
+	raw := []byte(`{"model":"grok-imagine-video-1.5","image":"https://example.com/first.png","duration":6}`)
+	body, _, err := prepareGrokPreviewLegacyVideoJSONBody(raw, "application/json", "grok-imagine-video-1.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["model"] != "grok-imagine-video-1.5-preview" {
+		t.Fatalf("model = %q", payload["model"])
+	}
+}
+
 func TestPrepareGrokVideoJSONBodyUsesLegacyImagesFirstFrame(t *testing.T) {
 	raw := []byte(`{"model":"grok-imagine-video-1.5","images":["data:image/png;base64,aaa","data:image/png;base64,bbb"],"seconds":"15"}`)
 	body, _, err := prepareGrokVideoJSONBody(raw, "application/json", "grok-imagine-video-1.5")

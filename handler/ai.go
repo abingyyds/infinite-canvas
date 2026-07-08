@@ -302,7 +302,7 @@ func prepareGrokPreviewLegacyVideoJSONBody(body []byte, contentType string, mode
 		prompt = "animate"
 	}
 	normalizedPayload := map[string]any{
-		"model":  strings.TrimSpace(modelName),
+		"model":  legacyGrokPreviewModelName(modelName),
 		"prompt": prompt,
 		"image":  image,
 	}
@@ -502,6 +502,14 @@ func isGrokImagineVideo(modelName string) bool {
 
 func isGrokPreviewVideo(modelName string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "grok-imagine-video-1.5")
+}
+
+func legacyGrokPreviewModelName(modelName string) string {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "grok-imagine-video-1.5" {
+		return "grok-imagine-video-1.5-preview"
+	}
+	return modelName
 }
 
 func readMultipartModel(body []byte, contentType string) string {

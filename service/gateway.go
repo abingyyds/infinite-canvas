@@ -867,7 +867,7 @@ func runtimeGatewayPlanBaseURL(accountBaseURL string) string {
 }
 
 func gatewayV1BaseURL(baseURL string) string {
-	baseURL = normalizeBaseURL(baseURL)
+	baseURL = normalizeModelChannelBaseURL(baseURL)
 	if strings.HasSuffix(strings.ToLower(baseURL), "/v1") {
 		return baseURL
 	}

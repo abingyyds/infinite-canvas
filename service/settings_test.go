@@ -69,6 +69,14 @@ func TestBuildModelChannelURLNormalizesArkV3TaskPath(t *testing.T) {
 	}
 }
 
+func TestBuildModelChannelURLNormalizesOpenAIVideoPath(t *testing.T) {
+	got := BuildModelChannelURL(model.ModelChannel{BaseURL: "https://ai.orbitlink.me/v1/videos/generations?debug=1"}, "/videos")
+	want := "https://ai.orbitlink.me/v1/videos"
+	if got != want {
+		t.Fatalf("BuildModelChannelURL = %q, want %q", got, want)
+	}
+}
+
 func TestNormalizeSettingsPublishesEnabledChannelModelsAndRepairsDefaults(t *testing.T) {
 	settings := normalizeSettings(model.Settings{
 		Public: model.PublicSetting{

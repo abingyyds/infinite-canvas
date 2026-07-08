@@ -214,7 +214,7 @@ func normalizeModelChannelBaseURL(baseURL string) string {
 	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
 		path := strings.TrimRight(parsed.Path, "/")
 		lowerPath := strings.ToLower(path)
-		for _, prefix := range []string{"/api/plan/v3", "/api/v3"} {
+		for _, prefix := range []string{"/api/plan/v3", "/api/v3", "/v1"} {
 			if index := strings.Index(lowerPath, prefix); index >= 0 {
 				end := index + len(prefix)
 				if len(lowerPath) == end || lowerPath[end] == '/' {
