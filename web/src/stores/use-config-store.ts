@@ -277,6 +277,7 @@ export function useEffectiveConfig() {
 export function buildApiUrl(baseUrl: string, path: string) {
     let normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
     normalizedBaseUrl = normalizeArkContentBaseUrl(normalizedBaseUrl);
+    normalizedBaseUrl = normalizedBaseUrl.replace(/\/v1\/videos\/generations$/i, "/v1").replace(/\/v1\/videos$/i, "/v1");
     const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
     const apiBaseUrl = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
     return `${apiBaseUrl}${path}`;

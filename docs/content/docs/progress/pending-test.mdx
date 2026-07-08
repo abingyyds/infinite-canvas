@@ -5,7 +5,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
-- Grok 视频生成改为适配 xAI 官方 `/v1/videos/generations` JSON 创建任务：`grok-imagine-video` 使用 `prompt`、`duration`、`aspect_ratio`、`resolution` 和可选 `reference_images`；`grok-imagine-video-1.5-preview` 会归一化为 `grok-imagine-video-1.5`，使用 1 张首帧 `image`、6/10/15 秒和比例参数；本地直连、后台 xAI 渠道和支持 Grok 官方视频平台的转发网关都会走新端点，避免误降级到旧 `/v1/videos` 导致 `invalid api platform`；后台渠道选择和轮询兼容 `grok-imagine-video-1.5` / `grok-imagine-video-1.5-preview` 两种模型名。需要验证本地直连和后台渠道下文生视频、参考图视频、首帧生视频、轮询和错误提示。
+- Grok 视频生成改为适配 xAI 官方 `/v1/videos/generations` JSON 创建任务：`grok-imagine-video` 使用 `prompt`、`duration`、`aspect_ratio`、`resolution` 和可选 `reference_images`；xAI 官方 `grok-imagine-video-1.5-preview` 会归一化为 `grok-imagine-video-1.5`，只使用 1 张首帧 `image: { url }`、1-15 秒和比例参数，不再携带 `prompt`、`reference_images`、`images`、`messages` 或 `stream`；Orbitlink 等非 xAI 官方兼容网关的 `grok-imagine-video-1.5-preview` 会走 `/v1/videos`，使用首帧 `image` 字符串、非空兜底 `prompt` 和 1-15 秒时长；后台渠道选择和轮询兼容 `grok-imagine-video-1.5` / `grok-imagine-video-1.5-preview` 两种模型名。需要验证本地直连和后台渠道下文生视频、参考图视频、首帧生视频、轮询和错误提示。
 - 画布生图和图生图失败时会尽量展示上游返回的具体错误原因，支持解析 `msg`、`message`、`detail`、`error.message` 以及嵌套 JSON 字符串；浏览器直连外部接口但没有收到响应时，会提示检查本地直连 Base URL、CORS、网络或后端代理状态；批量生图全部或部分失败时，顶部提示和失败节点都会带上首个具体失败原因，需要用无效 API Key、无权限模型、额度不足、上游参数错误或本地直连网络失败场景验证提示不再只显示“请求失败”。
 - 新增白标账号网关登录：普通账号密码登录本地失败后，会按环境变量配置尝试上游网关；登录成功后为本地用户绑定独立网关账号、自动创建或复用访问密钥并拉取模型列表；`/api/settings` 会按当前用户返回可用模型，AI 代理优先使用该用户自己的网关密钥且不扣本地算力点，画布、我的素材、生图记录和视频记录会按登录用户隔离，需要用不同网关账号和普通本地账号切换验证数据、模型和请求密钥互不串用。
 - SubRouter 白标账号直登默认先走主站 `/api/user/login`，再识别分站归属并创建/使用该用户自己的分站密钥；分站用户模型列表优先读取分站站点开放模型，兼容 `models`、`list`、`rows` 等返回结构，再回退到新建密钥 `/v1/models`，避免前台显示 0 个模型；需要验证未配置分站域名时分站用户也可以直接登录，模型下拉能显示站长给该分站开放的模型，且后续消耗其分站账户余额。

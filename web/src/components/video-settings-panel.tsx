@@ -46,6 +46,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
     const resolution = normalizeVideoResolutionValue(config.vquality);
     const currentSizeOptions = isGrokPreview ? sizeOptions.filter((item) => item.value !== "auto") : sizeOptions;
     const currentSecondOptions = isGrokPreview ? grokPreviewDurationOptions : secondOptions;
+    const maxSeconds = isGrokPreview ? 15 : 20;
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 720));
         onConfigChange("size", `${key === "width" ? next : dimensions.width}x${key === "height" ? next : dimensions.height}`);
@@ -101,7 +102,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                                 {value}s
                             </OptionPill>
                         ))}
-                        {isGrokPreview ? null : <NumberInput value={seconds} min={1} max={20} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />}
+                        <NumberInput value={seconds} min={1} max={maxSeconds} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
                     </div>
                 </SettingGroup>
             </div>

@@ -107,23 +107,25 @@ async function createGrokPreviewVideoTask(config: AiConfig, model: string, promp
     assertGrokPreviewReferences(references, videoReferences, audioReferences);
     const path = videoCreatePath(config, model);
     const official = path === "/videos/generations";
-    const requestModel = official ? normalizeGrokPreviewModel(model) : model;
+    const requestModel = official && config.channelMode !== "remote" ? normalizeGrokPreviewModel(model) : model;
     const firstFrame = official ? await resolveGrokImageUrl(config, references[0]) : await imageToDataUrl(references[0]);
     if (!firstFrame || (!firstFrame.startsWith("data:image/") && !isPublicMediaUrl(firstFrame))) throw new Error("首帧图片读取失败，请重新上传图片");
+    const duration = Number(normalizeGrokPreviewSeconds(config.videoSeconds, model));
+    const aspectRatio = normalizeGrokVideoAspectRatio(config.size || normalizeGrokPreviewVideoSize(config.size));
     const payload = official
         ? {
               model: requestModel,
-              prompt: prompt.trim(),
-              image: firstFrame,
-              duration: Number(normalizeGrokPreviewSeconds(config.videoSeconds, model)),
-              aspect_ratio: normalizeGrokVideoAspectRatio(config.size || normalizeGrokPreviewVideoSize(config.size)),
+              image: { url: firstFrame },
+              duration,
+              aspect_ratio: aspectRatio,
           }
         : {
               model,
-              prompt: prompt.trim(),
-              images: [firstFrame, firstFrame],
-              seconds: normalizeGrokPreviewSeconds(config.videoSeconds, model),
-              size: normalizeGrokPreviewVideoSize(config.size),
+              prompt: prompt.trim() || "animate",
+              image: firstFrame,
+              duration,
+              seconds: String(duration),
+              aspect_ratio: aspectRatio,
           };
 
     try {
