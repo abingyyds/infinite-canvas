@@ -298,7 +298,7 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask):
         const videoUrl = readVideoUrl(video);
         if (videoUrl && (!status || isCompletedVideoStatus(status))) {
             refreshRemoteUser(config);
-            return { status: "completed", result: await videoResultFromUrl(videoUrl, config) };
+            return { status: "completed", result: await videoResultFromUrl(videoUrl, config, task) };
         }
         if (isCompletedVideoStatus(status)) {
             const content = await axios.get<Blob>(aiApiUrl(config, `/videos/${task.id}/content`), { headers: aiHeaders(config), params: config.channelMode === "remote" ? { model: task.model } : undefined, responseType: "blob" });
@@ -440,8 +440,14 @@ async function uploadReferenceMedia(file: File) {
     return payload.url;
 }
 
-async function videoResultFromUrl(url: string, config?: AiConfig): Promise<VideoGenerationResult> {
+async function videoResultFromUrl(url: string, config?: AiConfig, task?: VideoGenerationTask): Promise<VideoGenerationResult> {
+    const remoteContentUrl = remoteVideoContentProxyUrl(config, url);
     try {
+        if (remoteContentUrl) {
+            const response = await axios.get<Blob>(remoteContentUrl, { headers: aiHeaders(config!), params: task?.model ? { model: task.model } : undefined, responseType: "blob" });
+            await assertVideoBlob(response.data);
+            return { blob: response.data };
+        }
         if (config?.channelMode === "local" && shouldSendVideoContentAuth(config, url)) {
             const response = await axios.post<Blob>("/api/video-content", { url, apiKey: config.apiKey }, { responseType: "blob" });
             await assertVideoBlob(response.data);
@@ -451,9 +457,37 @@ async function videoResultFromUrl(url: string, config?: AiConfig): Promise<Video
         const response = await axios.get<Blob>(url, { responseType: "blob", ...(headers ? { headers } : {}) });
         await assertVideoBlob(response.data);
         return { blob: response.data };
-    } catch {
+    } catch (error) {
+        if (remoteContentUrl) throw new Error(readAxiosError(error, "视频已生成，但下载视频内容失败"));
         return { url, mimeType: "video/mp4" };
     }
+}
+
+function remoteVideoContentProxyUrl(config: AiConfig | undefined, url: string) {
+    if (config?.channelMode !== "remote") return "";
+    const taskId = videoContentTaskId(url);
+    return taskId ? aiApiUrl(config, `/videos/${encodeURIComponent(taskId)}/content`) : "";
+}
+
+function videoContentTaskId(value: string) {
+    const path = videoContentPath(value);
+    const id = path.match(/\/(?:v1\/)?videos\/([^/]+)\/content\/?$/i)?.[1] || "";
+    try {
+        return decodeURIComponent(id);
+    } catch {
+        return id;
+    }
+}
+
+function videoContentPath(value: string) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    try {
+        if (/^(https?:)?\/\//i.test(text)) return new URL(text.startsWith("//") ? `https:${text}` : text).pathname;
+    } catch {
+        return "";
+    }
+    return text.split(/[?#]/)[0];
 }
 
 function shouldSendVideoContentAuth(config: AiConfig, url: string) {
