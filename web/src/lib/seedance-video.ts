@@ -60,9 +60,13 @@ export function isSeedanceVideoConfig(config: Pick<AiConfig, "model" | "videoMod
     return isSeedanceVideoModel(config.model || config.videoModel) || isArkPlanBaseUrl(config.baseUrl);
 }
 
+export function isArkSeedanceVideoConfig(config: Pick<AiConfig, "model" | "videoModel" | "baseUrl">) {
+    return isArkPlanBaseUrl(config.baseUrl);
+}
+
 export function isSeedanceVideoModel(model: string) {
     const value = model.toLowerCase();
-    return value.includes("doubao-seedance");
+    return value.includes("seedance");
 }
 
 export function isSeedanceFastModel(model: string) {

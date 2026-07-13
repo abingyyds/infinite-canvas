@@ -48,6 +48,34 @@ func TestResolveAIProxyPathDowngradesPreviewGatewayToVideos(t *testing.T) {
 	}
 }
 
+func TestResolveAIProxyPathKeepsSubRouterDoubaoSeedanceOnOpenAIVideos(t *testing.T) {
+	got := resolveAIProxyPath("https://subrouter.example.com/v1", "Doubao-Seedance-2.0", "/videos")
+	if got != "/videos" {
+		t.Fatalf("path = %q", got)
+	}
+}
+
+func TestResolveAIProxyPathUsesArkTaskEndpointOnlyForArkBaseURL(t *testing.T) {
+	got := resolveAIProxyPath("https://ark.cn-beijing.volces.com/api/v3", "Doubao-Seedance-2.0", "/videos")
+	if got != "/contents/generations/tasks" {
+		t.Fatalf("path = %q", got)
+	}
+}
+
+func TestResolveAIProxyPathKeepsSubRouterSingularVideoEndpoint(t *testing.T) {
+	got := resolveAIProxyPath("https://subrouter.example.com/v1", "seedance-2-0", "/video/generations")
+	if got != "/video/generations" {
+		t.Fatalf("path = %q", got)
+	}
+}
+
+func TestResolveAIProxyPathDoesNotRewriteNonSeedanceArkVideo(t *testing.T) {
+	got := resolveAIProxyPath("https://ark.cn-beijing.volces.com/api/v3", "grok-video", "/videos")
+	if got != "/videos" {
+		t.Fatalf("path = %q", got)
+	}
+}
+
 func TestPrepareGrokVideoJSONBodyNormalizesPreviewModel(t *testing.T) {
 	raw := []byte(`{"model":"grok-imagine-video-1.5-preview","prompt":"p","image":"https://example.com/first.png","duration":12,"aspect_ratio":"9:16","reference_images":[{"url":"https://example.com/ref.png"}],"messages":[],"stream":false}`)
 	body, contentType, err := prepareGrokVideoJSONBody(raw, "application/json", "grok-imagine-video-1.5-preview")

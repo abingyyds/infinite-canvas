@@ -844,10 +844,15 @@ func runtimeGatewayBaseURL(accountBaseURL string) string {
 }
 
 func runtimeGatewayModelBaseURL(accountBaseURL string, modelName string) string {
-	if isSeedanceModelName(modelName) {
+	if isSeedanceModelName(modelName) && isArkPlanBaseURL(accountBaseURL) {
 		return runtimeGatewayPlanBaseURL(accountBaseURL)
 	}
 	return runtimeGatewayBaseURL(accountBaseURL)
+}
+
+func isArkPlanBaseURL(baseURL string) bool {
+	lowerBaseURL := strings.ToLower(normalizeBaseURL(baseURL))
+	return strings.Contains(lowerBaseURL, "ark.cn-beijing.volces.com") || strings.Contains(lowerBaseURL, "/api/v3") || strings.Contains(lowerBaseURL, "/api/plan/v3")
 }
 
 func runtimeGatewayPlanBaseURL(accountBaseURL string) string {

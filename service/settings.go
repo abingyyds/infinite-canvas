@@ -237,7 +237,7 @@ func isArkAgentPlanChannel(channel model.ModelChannel) bool {
 
 func isSeedanceModelName(modelName string) bool {
 	modelName = strings.ToLower(strings.TrimSpace(modelName))
-	return strings.Contains(modelName, "doubao-seedance")
+	return strings.Contains(modelName, "seedance")
 }
 
 func enabledChannelModels(channels []model.ModelChannel) []string {
@@ -285,7 +285,12 @@ func repairDefaultModel(current string, models []string, preferred func(string) 
 
 func isVideoModelName(modelName string) bool {
 	name := strings.ToLower(strings.TrimSpace(modelName))
-	return strings.Contains(name, "seedance") || strings.Contains(name, "video")
+	for _, token := range []string{"seedance", "video", "grok-imagine-video", "grok-imagine-1.5", "sora", "veo", "kling", "wan", "hailuo", "cogvideo", "vidu", "luma", "pika", "runway", "pixverse", "hunyuan-video", "mochi", "ltx", "v2v", "jimeng-video"} {
+		if strings.Contains(name, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func isImageModelName(modelName string) bool {
