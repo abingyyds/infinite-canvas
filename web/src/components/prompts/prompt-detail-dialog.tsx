@@ -3,7 +3,7 @@
 import { Copy, FolderPlus } from "lucide-react";
 import { Button, Modal, Space, Tag } from "antd";
 
-import { formatPromptDate, type Prompt } from "@/services/api/prompts";
+import { formatPromptDate, getPromptImageUrl, type Prompt } from "@/services/api/prompts";
 
 export function PromptDetailDialog({ prompt, onClose, onCopy, onSaveAsset }: { prompt: Prompt | null; onClose: () => void; onCopy: (prompt: string) => void; onSaveAsset?: (prompt: Prompt) => void }) {
     return (
@@ -13,7 +13,16 @@ export function PromptDetailDialog({ prompt, onClose, onCopy, onSaveAsset }: { p
                     <>
                         <div className="grid gap-5 md:grid-cols-[300px_minmax(0,1fr)]">
                             <div className="space-y-3">
-                                <img src={prompt.coverUrl} alt={prompt.title} className="aspect-[4/3] w-full rounded-lg object-cover" />
+                                <img
+                                    src={getPromptImageUrl(prompt.coverUrl)}
+                                    alt={prompt.title}
+                                    decoding="async"
+                                    className="aspect-[4/3] w-full rounded-lg object-cover"
+                                    onError={(event) => {
+                                        event.currentTarget.onerror = null;
+                                        event.currentTarget.src = "/logo.svg";
+                                    }}
+                                />
                                 {prompt.preview ? <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded-lg bg-stone-100 p-3 text-xs leading-5 text-stone-600 dark:bg-stone-900 dark:text-stone-300">{prompt.preview}</pre> : null}
                             </div>
                             <div className="min-w-0">

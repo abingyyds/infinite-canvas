@@ -10,7 +10,7 @@ import { usePromptList } from "@/components/prompts/use-prompt-list";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { cn } from "@/lib/utils";
 import { useAssetStore } from "@/stores/use-asset-store";
-import { ALL_PROMPTS_OPTION, type Prompt } from "@/services/api/prompts";
+import { ALL_PROMPTS_OPTION, getPromptImageUrl, type Prompt } from "@/services/api/prompts";
 
 export default function PromptsPage() {
     const { message } = App.useApp();
@@ -34,7 +34,15 @@ export default function PromptsPage() {
     };
 
     const savePromptAsset = (item: Prompt) => {
-        addAsset({ kind: "text", title: item.title, coverUrl: item.coverUrl, tags: item.tags, source: item.category, data: { content: item.prompt }, metadata: { source: "prompt-library", promptId: item.id, githubUrl: item.githubUrl } });
+        addAsset({
+            kind: "text",
+            title: item.title,
+            coverUrl: getPromptImageUrl(item.coverUrl),
+            tags: item.tags,
+            source: item.category,
+            data: { content: item.prompt },
+            metadata: { source: "prompt-library", promptId: item.id, githubUrl: item.githubUrl },
+        });
         message.success("已加入我的素材");
     };
 

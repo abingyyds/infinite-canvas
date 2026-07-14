@@ -15,6 +15,18 @@ export type Prompt = {
 
 export const ALL_PROMPTS_OPTION = "全部";
 
+export function getPromptImageUrl(coverUrl: string) {
+    const value = coverUrl.trim();
+    if (!value || value.startsWith("/") || value.startsWith("data:") || value.startsWith("blob:")) return value;
+    try {
+        const url = new URL(value);
+        if (url.protocol !== "http:" && url.protocol !== "https:") return value;
+        return `/prompt-image?url=${encodeURIComponent(url.toString())}`;
+    } catch {
+        return value;
+    }
+}
+
 export type PromptListResponse = {
     items: Prompt[];
     tags: string[];

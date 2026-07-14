@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [修复] 提示词中心和首页提示词图片改用同源代理、懒加载与失败兜底，修复继续滚动加载更多后外链图片无法显示的问题。
 + [优化] Grok Imagine Video 改为适配 xAI 官方 `/v1/videos/generations` 创建任务，并兼容 1.5 preview 旧模型名。
 + [修复] 后台普通 Grok 官方视频渠道不再因 Base URL 非 `api.x.ai` 被误降级到旧 `/v1/videos`，避免上游返回 `invalid api platform`。
 + [修复] 后台 Grok 1.5 视频创建和轮询兼容 `grok-imagine-video-1.5` 与 `grok-imagine-video-1.5-preview` 两种模型名。

@@ -5,6 +5,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+- 提示词中心及首页提示词展示会通过同源图片代理加载 GitHub、YouMind、ImgEdify 和 X 图片源，并对卡片图片启用懒加载与失败兜底；需要验证提示词中心首次加载、继续向下滚动加载更多、筛选分类、提示词详情弹窗、首页预览和加入我的素材后的封面均能正常显示。
 - Grok 视频生成改为适配 xAI 官方 `/v1/videos/generations` JSON 创建任务：`grok-imagine-video` 使用 `prompt`、`duration`、`aspect_ratio`、`resolution` 和可选 `reference_images`；xAI 官方 `grok-imagine-video-1.5-preview` 会归一化为 `grok-imagine-video-1.5`，只使用 1 张首帧 `image: { url }`、1-15 秒和比例参数，不再携带 `prompt`、`reference_images`、`images`、`messages` 或 `stream`；Orbitlink 等非 xAI 官方兼容网关的 `grok-imagine-video-1.5-preview` 会走 `/v1/videos`，使用首帧 `image` 字符串、非空兜底 `prompt` 和 1-15 秒时长；后台渠道选择和轮询兼容 `grok-imagine-video-1.5` / `grok-imagine-video-1.5-preview` 两种模型名。需要验证本地直连和后台渠道下文生视频、参考图视频、首帧生视频、轮询和错误提示。
 - Railway/SubRouter 后台渠道返回 `http://subrouter.railway.internal:8080/v1/videos/{id}/content` 等内网视频内容地址时，前端会改用同源 `/api/v1/videos/{id}/content` 代理下载 Blob，避免 HTTPS 页面 Mixed Content 拦截；需要在生产域名验证视频生成成功后能正常保存到视频创作台和画布节点。
 - 画布生图和图生图失败时会尽量展示上游返回的具体错误原因，支持解析 `msg`、`message`、`detail`、`error.message` 以及嵌套 JSON 字符串；浏览器直连外部接口但没有收到响应时，会提示检查本地直连 Base URL、CORS、网络或后端代理状态；批量生图全部或部分失败时，顶部提示和失败节点都会带上首个具体失败原因，需要用无效 API Key、无权限模型、额度不足、上游参数错误或本地直连网络失败场景验证提示不再只显示“请求失败”。
