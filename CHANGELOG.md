@@ -2,9 +2,6 @@
 
 ## Unreleased
 
-+ [修复] SubRouter/OpenAI Video 的 Seedance 模型不再仅按 `doubao-seedance` 名称误切到火山 Agent Plan；按模型端点使用 `/v1/videos` 或 `/v1/video/generations` 的 multipart 请求，只有明确的火山 `/api/v3` 或 `/api/plan/v3` Base URL 才走原生任务接口。
-+ [优化] 扩展视频模型识别，补充 SubRouter 中的 `grok-imagine-1.5`、`omni-v2v` 等模型，避免被归类到文本模型。
-+ [优化] 视频任务响应解析兼容 camelCase 任务字段、`state` 状态和 `result.download_url` 等常见 SubRouter 返回结构。
 + [优化] Grok Imagine Video 改为适配 xAI 官方 `/v1/videos/generations` 创建任务，并兼容 1.5 preview 旧模型名。
 + [修复] 后台普通 Grok 官方视频渠道不再因 Base URL 非 `api.x.ai` 被误降级到旧 `/v1/videos`，避免上游返回 `invalid api platform`。
 + [修复] 后台 Grok 1.5 视频创建和轮询兼容 `grok-imagine-video-1.5` 与 `grok-imagine-video-1.5-preview` 两种模型名。

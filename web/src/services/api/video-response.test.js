@@ -40,21 +40,4 @@ describe("video response parser", () => {
             }),
         ).toBe("generation failed: quota exceeded");
     });
-
-    it("reads camel-case tasks and nested result urls", () => {
-        const payload = {
-            taskId: "task_camel",
-            state: "completed",
-            result: { download_url: "https://cdn.example.com/result.mp4" },
-        };
-
-        expect(readVideoTaskId(payload)).toBe("task_camel");
-        expect(readVideoStatus(payload)).toBe("completed");
-        expect(readVideoUrl(payload)).toBe("https://cdn.example.com/result.mp4");
-    });
-
-    it("reads string and coded error payloads", () => {
-        expect(readVideoErrorMessage({ error: "provider rejected the request" })).toBe("provider rejected the request");
-        expect(readVideoErrorMessage({ error: { code: "InvalidParameter", message: "bad duration" } })).toBe("bad duration");
-    });
 });

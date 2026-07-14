@@ -35,19 +35,12 @@ func New() *gin.Engine {
 	v1.POST("/audio/speech", gin.WrapF(handler.AIAudioSpeech))
 	v1.POST("/videos/generations", gin.WrapF(handler.AIVideoGenerations))
 	v1.POST("/videos", gin.WrapF(handler.AIVideos))
-	v1.POST("/video/generations", gin.WrapF(handler.AIVideoGenerationsLegacy))
 	v1.POST("/media/references", gin.WrapF(handler.UploadReferenceMedia))
 	v1.GET("/videos/:id", func(c *gin.Context) {
 		handler.AIVideo(c.Writer, c.Request, c.Param("id"))
 	})
 	v1.GET("/videos/:id/content", func(c *gin.Context) {
 		handler.AIVideoContent(c.Writer, c.Request, c.Param("id"))
-	})
-	v1.GET("/video/generations/:id", func(c *gin.Context) {
-		handler.AIVideoLegacy(c.Writer, c.Request, c.Param("id"))
-	})
-	v1.GET("/video/generations/:id/content", func(c *gin.Context) {
-		handler.AIVideoContentLegacy(c.Writer, c.Request, c.Param("id"))
 	})
 	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
 	api.GET("/assets", middleware.OptionalAuth, gin.WrapF(handler.Assets))

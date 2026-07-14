@@ -143,7 +143,7 @@ function preferredModel(models: string[], predicate: (model: string) => boolean)
 
 function isVideoModelName(model: string) {
     const value = model.toLowerCase();
-    return ["seedance", "video", "grok-imagine-video", "grok-imagine-1.5", "sora", "veo", "kling", "wan", "hailuo", "cogvideo", "vidu", "luma", "pika", "runway", "pixverse", "hunyuan-video", "mochi", "ltx", "v2v", "jimeng-video"].some((token) => value.includes(token));
+    return value.includes("seedance") || value.includes("video") || value.includes("sora") || value.includes("veo") || value.includes("kling") || value.includes("wan") || value.includes("hailuo");
 }
 
 function isImageModelName(model: string) {
