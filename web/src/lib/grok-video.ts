@@ -13,11 +13,13 @@ const grokRatioSizes = {
 } as const;
 
 export function isGrokImagineVideoModel(model: string) {
-    return model.toLowerCase().includes("grok-imagine-video");
+    return model.toLowerCase().includes("grok-imagine-video") || isGrokPreviewVideoModel(model);
 }
 
 export function isGrokPreviewVideoModel(model: string) {
-    return model.toLowerCase().includes("grok-imagine-video-1.5");
+    const name = model.toLowerCase();
+    // "grok-video-1.5" is the SubRouter-style name for the same first-frame video model.
+    return name.includes("grok-imagine-video-1.5") || name.includes("grok-video-1.5");
 }
 
 export function normalizeGrokPreviewModel(model: string) {

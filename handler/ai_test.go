@@ -48,6 +48,55 @@ func TestResolveAIProxyPathDowngradesPreviewGatewayToVideos(t *testing.T) {
 	}
 }
 
+func TestResolveAIProxyPathDowngradesSubRouterGrokVideoToVideos(t *testing.T) {
+	got := resolveAIProxyPath("https://subrouter.ai/v1", "grok-video-1.5", "/videos/generations")
+	if got != "/videos" {
+		t.Fatalf("path = %q", got)
+	}
+}
+
+func TestPrepareAIProxyBodyConvertsSubRouterGrokVideoToLegacyJSON(t *testing.T) {
+	raw := []byte(`{"model":"grok-video-1.5","prompt":"产品图轻微旋转展示","image":{"url":"https://example.com/first.jpg"},"duration":6,"aspect_ratio":"9:16"}`)
+	body, contentType, err := prepareAIProxyBody("/videos/generations", "/videos", raw, "application/json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contentType != "application/json" {
+		t.Fatalf("contentType = %q", contentType)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["model"] != "grok-video-1.5" {
+		t.Fatalf("model = %q", payload["model"])
+	}
+	if payload["prompt"] != "产品图轻微旋转展示" {
+		t.Fatalf("prompt = %q", payload["prompt"])
+	}
+	if payload["image"] != "https://example.com/first.jpg" {
+		t.Fatalf("image = %#v", payload["image"])
+	}
+	if payload["duration"] != float64(6) || payload["seconds"] != "6" || payload["aspect_ratio"] != "9:16" {
+		t.Fatalf("video params = %#v", payload)
+	}
+}
+
+func TestPrepareGrokPreviewLegacyVideoJSONBodyKeepsSubRouterModelName(t *testing.T) {
+	raw := []byte(`{"model":"grok-video-1.5","image":"https://example.com/first.jpg","duration":6}`)
+	body, _, err := prepareGrokPreviewLegacyVideoJSONBody(raw, "application/json", "grok-video-1.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["model"] != "grok-video-1.5" {
+		t.Fatalf("model = %q", payload["model"])
+	}
+}
+
 func TestPrepareGrokVideoJSONBodyNormalizesPreviewModel(t *testing.T) {
 	raw := []byte(`{"model":"grok-imagine-video-1.5-preview","prompt":"p","image":"https://example.com/first.png","duration":12,"aspect_ratio":"9:16","reference_images":[{"url":"https://example.com/ref.png"}],"messages":[],"stream":false}`)
 	body, contentType, err := prepareGrokVideoJSONBody(raw, "application/json", "grok-imagine-video-1.5-preview")

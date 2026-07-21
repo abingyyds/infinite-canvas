@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [修复] SubRouter 命名的 `grok-video-1.5` 现在按 Grok 1.5 首帧 JSON 接口（`image` 字符串 + `prompt`）创建视频任务，不再误走 Sora 风格 multipart 导致上游报 `multipart: NextPart: EOF` 或参数无效；远程模式下 prompt 会随首帧请求一并传给渠道。
 + [修复] 提示词中心和首页提示词图片改用同源代理、懒加载与失败兜底，修复继续滚动加载更多后外链图片无法显示的问题。
 + [优化] Grok Imagine Video 改为适配 xAI 官方 `/v1/videos/generations` 创建任务，并兼容 1.5 preview 旧模型名。
 + [修复] 后台普通 Grok 官方视频渠道不再因 Base URL 非 `api.x.ai` 被误降级到旧 `/v1/videos`，避免上游返回 `invalid api platform`。
