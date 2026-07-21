@@ -1,29 +1,37 @@
 export type VideoResponse = {
     id?: string;
     request_id?: string;
+    requestId?: string;
     task_id?: string;
+    taskId?: string;
     video_id?: string;
+    videoId?: string;
     status?: string;
+    state?: string;
     data?: VideoResponse | null;
     progress?: number;
     fail_reason?: string;
     message?: string;
     msg?: string;
     detail?: string;
-    error?: { message?: string } | null;
+    error?: string | { code?: string; message?: string } | null;
     video?: { url?: string; video_url?: string; duration?: number } | null;
     url?: string;
     videoUrl?: string;
     video_url?: string;
+    download_url?: string;
+    file_url?: string;
+    video_uri?: string;
     result_url?: string;
     local_preview_url?: string;
-    content?: string | { url?: string; video_url?: string; result_url?: string; local_preview_url?: string; message?: string; fail_reason?: string; error?: { message?: string } | null } | null;
+    content?: string | { url?: string; video_url?: string; result_url?: string; local_preview_url?: string; message?: string; fail_reason?: string; error?: string | { code?: string; message?: string } | null } | null;
     output?: { url?: string; video_url?: string; videos?: Array<{ url?: string; video_url?: string }> } | null;
+    result?: unknown;
 };
 
 export function readVideoTaskId(payload: VideoResponse) {
     for (const entry of iteratePayloads(payload)) {
-        const taskId = pickText([entry.request_id, entry.task_id, entry.video_id, entry.id]);
+        const taskId = pickText([entry.request_id, entry.requestId, entry.task_id, entry.taskId, entry.video_id, entry.videoId, entry.id]);
         if (taskId) return taskId;
     }
     return undefined;
@@ -31,7 +39,7 @@ export function readVideoTaskId(payload: VideoResponse) {
 
 export function readVideoStatus(payload: VideoResponse) {
     for (const entry of iteratePayloads(payload)) {
-        const status = normalizeText(entry.status).toLowerCase();
+        const status = normalizeText(entry.status || entry.state).toLowerCase();
         if (status) return status;
     }
     return "";
@@ -76,6 +84,9 @@ function readStructuredVideoUrl(value: unknown, depth = 0): string {
         readStructuredVideoUrl(video?.video_url, depth + 1),
         readStructuredVideoUrl(value.videoUrl, depth + 1),
         readStructuredVideoUrl(value.video_url, depth + 1),
+        readStructuredVideoUrl(value.download_url, depth + 1),
+        readStructuredVideoUrl(value.file_url, depth + 1),
+        readStructuredVideoUrl(value.video_uri, depth + 1),
         readStructuredVideoUrl(value.result_url, depth + 1),
         readStructuredVideoUrl(value.local_preview_url, depth + 1),
         readStructuredVideoUrl(value.url, depth + 1),
@@ -83,6 +94,7 @@ function readStructuredVideoUrl(value: unknown, depth = 0): string {
         readStructuredVideoUrl(output?.video_url, depth + 1),
         readStructuredVideoUrl(output?.url, depth + 1),
         readStructuredVideoUrl(output?.videos, depth + 1),
+        readStructuredVideoUrl(value.result, depth + 1),
         readStructuredVideoUrl(value.data, depth + 1),
     ]);
 }
@@ -104,7 +116,9 @@ function readStructuredErrorText(value: unknown, depth = 0, trusted = false): st
 
     const error = asRecord(value.error);
     return pickFirst([
+        readStructuredErrorText(value.error, depth + 1, true),
         readStructuredErrorText(error?.message, depth + 1, true),
+        readStructuredErrorText(error?.code, depth + 1, true),
         readStructuredErrorText(value.fail_reason, depth + 1, true),
         readStructuredErrorText(value.message, depth + 1),
         readStructuredErrorText(value.msg, depth + 1),
@@ -115,6 +129,7 @@ function readStructuredErrorText(value: unknown, depth = 0, trusted = false): st
         readStructuredErrorText(value.url, depth + 1),
         readStructuredErrorText(value.video_url, depth + 1),
         readStructuredErrorText(value.videoUrl, depth + 1),
+        readStructuredErrorText(value.result, depth + 1),
         readStructuredErrorText(value.output, depth + 1),
         readStructuredErrorText(value.data, depth + 1),
     ]);
@@ -130,11 +145,15 @@ function parseStructuredValue(value: string) {
 }
 
 function looksLikeErrorText(value: string) {
-    return /fail|error|invalid|denied|reject|forbidden|unauthori|quota|limit|timeout|timed out|expired|unsupported|missing|insufficient|exceed|violation|policy|unable|cannot|can't|could not|bad request|internal|unavailable|wrong|cancell?ed|abort|拒绝|失败|错误|超时|过期|无效|限制|不足|不支持|缺少|异常|违规/i.test(value);
+    return /fail|error|invalid|denied|reject|forbidden|unauthori|quota|limit|timeout|timed out|expired|unsupported|missing|insufficient|exceed|violation|policy|unable|cannot|can't|could not|bad request|internal|unavailable|wrong|cancell?ed|abort|拒绝|失败|错误|超时|过期|无效|限制|不足|不支持|缺少|异常|违规/i.test(
+        value,
+    );
 }
 
 function isIgnorableTaskMessage(value: string) {
-    return /^(queued|queueing|pending|processing|running|starting|submitted|accepted|created|scheduled|generating|rendering|working|in[\s-]?progress|success|succeeded|completed|complete|done)(?:[\s.:!-]|$)|^(排队中|处理中|生成中|运行中|等待中|已提交|已创建|已完成|处理中，请稍后)/i.test(value);
+    return /^(queued|queueing|pending|processing|running|starting|submitted|accepted|created|scheduled|generating|rendering|working|in[\s-]?progress|success|succeeded|completed|complete|done)(?:[\s.:!-]|$)|^(排队中|处理中|生成中|运行中|等待中|已提交|已创建|已完成|处理中，请稍后)/i.test(
+        value,
+    );
 }
 
 function isVideoLocation(value: string) {

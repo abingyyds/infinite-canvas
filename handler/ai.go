@@ -43,12 +43,24 @@ func AIVideoGenerations(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/videos/generations")
 }
 
+func AIVideoGenerationsLegacy(w http.ResponseWriter, r *http.Request) {
+	proxyAIRequest(w, r, "/video/generations")
+}
+
 func AIVideo(w http.ResponseWriter, r *http.Request, id string) {
 	proxyAIGetRequest(w, r, "/videos/"+id)
 }
 
 func AIVideoContent(w http.ResponseWriter, r *http.Request, id string) {
 	proxyAIGetRequest(w, r, "/videos/"+id+"/content")
+}
+
+func AIVideoLegacy(w http.ResponseWriter, r *http.Request, id string) {
+	proxyAIGetRequest(w, r, "/video/generations/"+id)
+}
+
+func AIVideoContentLegacy(w http.ResponseWriter, r *http.Request, id string) {
+	proxyAIGetRequest(w, r, "/video/generations/"+id+"/content")
 }
 
 func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
@@ -208,7 +220,7 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 		}
 		return body, contentType, nil
 	}
-	if proxyPath != "/videos" || !strings.HasPrefix(contentType, "application/json") {
+	if (proxyPath != "/videos" && proxyPath != "/video/generations") || !strings.HasPrefix(contentType, "application/json") {
 		return body, contentType, nil
 	}
 	var payload struct {
@@ -219,6 +231,24 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 		ResolutionName string   `json:"resolution_name"`
 		Preset         string   `json:"preset"`
 		InputReference []string `json:"input_reference"`
+		Ratio          string   `json:"ratio"`
+		Resolution     string   `json:"resolution"`
+		Duration       any      `json:"duration"`
+		GenerateAudio  any      `json:"generate_audio"`
+		Watermark      any      `json:"watermark"`
+		Content        []struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			ImageURL struct {
+				URL string `json:"url"`
+			} `json:"image_url"`
+			VideoURL struct {
+				URL string `json:"url"`
+			} `json:"video_url"`
+			AudioURL struct {
+				URL string `json:"url"`
+			} `json:"audio_url"`
+		} `json:"content"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, "", err
@@ -229,16 +259,46 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 		}
 		return prepareGrokVideoJSONBody(body, contentType, payload.Model)
 	}
+	prompt := payload.Prompt
+	references := payload.InputReference
+	for _, item := range payload.Content {
+		if prompt == "" && item.Type == "text" {
+			prompt = item.Text
+		}
+		for _, url := range []string{item.ImageURL.URL, item.VideoURL.URL, item.AudioURL.URL} {
+			if strings.TrimSpace(url) != "" {
+				references = append(references, url)
+			}
+		}
+	}
+	seconds := payload.Seconds
+	duration := multipartFieldValue(payload.Duration)
+	if seconds == "" && duration != "" {
+		if duration == "-1" {
+			seconds = "6"
+		} else {
+			seconds = duration
+		}
+	}
+	resolutionName := payload.ResolutionName
+	if resolutionName == "" {
+		resolutionName = payload.Resolution
+	}
 	var buffer bytes.Buffer
 	writer := multipart.NewWriter(&buffer)
 	writeMultipartField(writer, "model", payload.Model)
-	writeMultipartField(writer, "prompt", payload.Prompt)
-	writeMultipartField(writer, "seconds", payload.Seconds)
+	writeMultipartField(writer, "prompt", prompt)
+	writeMultipartField(writer, "seconds", seconds)
 	writeMultipartField(writer, "size", payload.Size)
-	writeMultipartField(writer, "resolution_name", payload.ResolutionName)
+	writeMultipartField(writer, "resolution_name", resolutionName)
 	writeMultipartField(writer, "preset", payload.Preset)
-	for index, reference := range payload.InputReference {
-		if isHTTPURL(reference) {
+	writeMultipartField(writer, "ratio", payload.Ratio)
+	writeMultipartField(writer, "resolution", payload.Resolution)
+	writeMultipartField(writer, "duration", duration)
+	writeMultipartField(writer, "generate_audio", multipartFieldValue(payload.GenerateAudio))
+	writeMultipartField(writer, "watermark", multipartFieldValue(payload.Watermark))
+	for index, reference := range references {
+		if !strings.HasPrefix(strings.TrimSpace(reference), "data:") {
 			_ = writer.WriteField("input_reference[]", reference)
 			continue
 		}
@@ -250,6 +310,13 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 		return nil, "", err
 	}
 	return buffer.Bytes(), writer.FormDataContentType(), nil
+}
+
+func multipartFieldValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func prepareGrokVideoJSONBody(body []byte, contentType string, modelName string) ([]byte, string, error) {
@@ -491,11 +558,6 @@ func escapeMultipartQuote(value string) string {
 	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"").Replace(value)
 }
 
-func isHTTPURL(value string) bool {
-	lower := strings.ToLower(strings.TrimSpace(value))
-	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
-}
-
 func isGrokImagineVideo(modelName string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "grok-imagine-video") || isGrokPreviewVideo(modelName)
 }
@@ -574,6 +636,12 @@ func resolveAIProxyPath(baseURL string, modelName string, path string) string {
 	if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
 		return "/contents/generations/tasks/" + strings.TrimPrefix(path, "/videos/")
 	}
+	if path == "/video/generations" {
+		return "/contents/generations/tasks"
+	}
+	if strings.HasPrefix(path, "/video/generations/") && !strings.HasSuffix(path, "/content") {
+		return "/contents/generations/tasks/" + strings.TrimPrefix(path, "/video/generations/")
+	}
 	return path
 }
 
@@ -587,8 +655,8 @@ func isOfficialXAIBaseURL(baseURL string) bool {
 
 func isArkSeedanceVideo(baseURL string, modelName string) bool {
 	base := strings.ToLower(baseURL)
-	model := strings.ToLower(modelName)
-	return strings.Contains(model, "doubao-seedance") || strings.Contains(base, "/api/v3") || strings.Contains(base, "/api/plan/v3")
+	model := strings.ToLower(strings.TrimSpace(modelName))
+	return strings.Contains(model, "seedance") && (strings.Contains(base, "ark.cn-beijing.volces.com") || strings.Contains(base, "/api/v3") || strings.Contains(base, "/api/plan/v3"))
 }
 
 func aiStatusMessage(statusCode int) string {

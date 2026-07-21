@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [修复] SubRouter 白标网关的 `doubao-seedance` 模型不再仅按模型名误切火山 Agent Plan 接口，只有账号 Base URL 明确是火山 `/api/v3` / `/api/plan/v3` 时才走 `/contents/generations/tasks`，避免上游报 `Invalid URL (POST /api/v3/contents/generations/tasks)`；非火山渠道收到 Ark 风格 Seedance JSON 时后端会自动转换为带 `prompt`、`ratio`、`resolution`、`duration`、`generate_audio`、`watermark` 和 `input_reference[]` 的 multipart 请求。
++ [修复] SubRouter 的 `seedance-2-0` / `seedance-2.0`（含 `-fast`）改为 multipart 直发 `/v1/video/generations` 创建任务并轮询同路径，本地直连与远程代理一致，修复 `/v1/videos` 上游报 `multipart: NextPart: EOF`；视频任务响应解析兼容 camelCase 任务字段、`state` 状态、字符串错误和 `result.download_url` 等 SubRouter 返回结构。
 + [修复] SubRouter 命名的 `grok-video-1.5` 现在按 Grok 1.5 首帧 JSON 接口（`image` 字符串 + `prompt`）创建视频任务，不再误走 Sora 风格 multipart 导致上游报 `multipart: NextPart: EOF` 或参数无效；远程模式下 prompt 会随首帧请求一并传给渠道。
 + [修复] 提示词中心和首页提示词图片改用同源代理、懒加载与失败兜底，修复继续滚动加载更多后外链图片无法显示的问题。
 + [优化] Grok Imagine Video 改为适配 xAI 官方 `/v1/videos/generations` 创建任务，并兼容 1.5 preview 旧模型名。

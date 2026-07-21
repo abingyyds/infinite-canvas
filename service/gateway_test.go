@@ -21,12 +21,12 @@ func TestRuntimeGatewayModelBaseURLKeepsV1ForOpenAIModels(t *testing.T) {
 	}
 }
 
-func TestRuntimeGatewayModelBaseURLUsesContentPathForSeedance(t *testing.T) {
+func TestRuntimeGatewayModelBaseURLUsesContentPathForArkBaseURL(t *testing.T) {
 	oldConfig := config.Cfg
 	t.Cleanup(func() { config.Cfg = oldConfig })
 	config.Cfg = config.Config{}
 
-	baseURL := runtimeGatewayModelBaseURL("https://gateway.example.com", "doubao-seedance-2.0-fast")
+	baseURL := runtimeGatewayModelBaseURL("https://gateway.example.com/api/v3", "doubao-seedance-2.0-fast")
 	got := BuildModelChannelURL(model.ModelChannel{BaseURL: baseURL}, "/contents/generations/tasks")
 	want := "https://gateway.example.com/api/v3/contents/generations/tasks"
 	if got != want {
@@ -58,25 +58,28 @@ func TestRuntimeGatewayModelBaseURLNormalizesOpenAIVideoPath(t *testing.T) {
 	}
 }
 
-func TestRuntimeGatewayModelBaseURLRewritesPublicV1ForSeedance(t *testing.T) {
+func TestRuntimeGatewayModelBaseURLKeepsSubRouterV1ForDoubaoSeedance(t *testing.T) {
 	oldConfig := config.Cfg
 	t.Cleanup(func() { config.Cfg = oldConfig })
 	config.Cfg = config.Config{GatewayPublicBaseURL: "https://public-gateway.example.com/v1"}
 
 	got := runtimeGatewayModelBaseURL("https://account-gateway.example.com", "doubao-seedance-2.0")
-	want := "https://public-gateway.example.com/api/v3"
+	want := "https://public-gateway.example.com/v1"
 	if got != want {
 		t.Fatalf("runtimeGatewayModelBaseURL = %q, want %q", got, want)
 	}
 }
 
-func TestRuntimeGatewayModelBaseURLKeepsExplicitPlanPathForSeedance(t *testing.T) {
+func TestRuntimeGatewayModelBaseURLDoesNotInferArkFromPublicBaseURL(t *testing.T) {
 	oldConfig := config.Cfg
 	t.Cleanup(func() { config.Cfg = oldConfig })
-	config.Cfg = config.Config{GatewayPublicBaseURL: "https://plan-gateway.example.com/api/plan/v3"}
+	config.Cfg = config.Config{
+		GatewayPublicBaseURL:     "https://public-gateway.example.com/v1",
+		GatewayBaseURLCandidates: "https://plan-gateway.example.com/api/plan/v3",
+	}
 
 	got := runtimeGatewayModelBaseURL("https://account-gateway.example.com", "doubao-seedance-2.0")
-	want := "https://plan-gateway.example.com/api/plan/v3"
+	want := "https://public-gateway.example.com/v1"
 	if got != want {
 		t.Fatalf("runtimeGatewayModelBaseURL = %q, want %q", got, want)
 	}
