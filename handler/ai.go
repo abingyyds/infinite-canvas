@@ -497,11 +497,13 @@ func isHTTPURL(value string) bool {
 }
 
 func isGrokImagineVideo(modelName string) bool {
-	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "grok-imagine-video")
+	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "grok-imagine-video") || isGrokPreviewVideo(modelName)
 }
 
 func isGrokPreviewVideo(modelName string) bool {
-	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "grok-imagine-video-1.5")
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	// "grok-video-1.5" is the SubRouter-style name for the same first-frame video model.
+	return strings.Contains(name, "grok-imagine-video-1.5") || strings.Contains(name, "grok-video-1.5")
 }
 
 func legacyGrokPreviewModelName(modelName string) string {

@@ -103,6 +103,8 @@ async function createGrokPreviewVideoTask(config: AiConfig, model: string, promp
     const payload = official
         ? {
               model: requestModel,
+              // remote 模式由后端按渠道决定是否保留 prompt；本地直连 xAI 官方接口不发 prompt
+              ...(config.channelMode === "remote" && prompt.trim() ? { prompt: prompt.trim() } : {}),
               image: { url: firstFrame },
               duration,
               aspect_ratio: aspectRatio,
