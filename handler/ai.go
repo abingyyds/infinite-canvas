@@ -220,7 +220,13 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 		}
 		return body, contentType, nil
 	}
-	if (proxyPath != "/videos" && proxyPath != "/video/generations") || !strings.HasPrefix(contentType, "application/json") {
+	if !strings.HasPrefix(contentType, "application/json") {
+		return body, contentType, nil
+	}
+	if proxyPath == "/video/generations" {
+		return prepareUnifiedVideoJSONBody(body, contentType)
+	}
+	if proxyPath != "/videos" {
 		return body, contentType, nil
 	}
 	var payload struct {
@@ -231,24 +237,6 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 		ResolutionName string   `json:"resolution_name"`
 		Preset         string   `json:"preset"`
 		InputReference []string `json:"input_reference"`
-		Ratio          string   `json:"ratio"`
-		Resolution     string   `json:"resolution"`
-		Duration       any      `json:"duration"`
-		GenerateAudio  any      `json:"generate_audio"`
-		Watermark      any      `json:"watermark"`
-		Content        []struct {
-			Type     string `json:"type"`
-			Text     string `json:"text"`
-			ImageURL struct {
-				URL string `json:"url"`
-			} `json:"image_url"`
-			VideoURL struct {
-				URL string `json:"url"`
-			} `json:"video_url"`
-			AudioURL struct {
-				URL string `json:"url"`
-			} `json:"audio_url"`
-		} `json:"content"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, "", err
@@ -259,45 +247,15 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 		}
 		return prepareGrokVideoJSONBody(body, contentType, payload.Model)
 	}
-	prompt := payload.Prompt
-	references := payload.InputReference
-	for _, item := range payload.Content {
-		if prompt == "" && item.Type == "text" {
-			prompt = item.Text
-		}
-		for _, url := range []string{item.ImageURL.URL, item.VideoURL.URL, item.AudioURL.URL} {
-			if strings.TrimSpace(url) != "" {
-				references = append(references, url)
-			}
-		}
-	}
-	seconds := payload.Seconds
-	duration := multipartFieldValue(payload.Duration)
-	if seconds == "" && duration != "" {
-		if duration == "-1" {
-			seconds = "6"
-		} else {
-			seconds = duration
-		}
-	}
-	resolutionName := payload.ResolutionName
-	if resolutionName == "" {
-		resolutionName = payload.Resolution
-	}
 	var buffer bytes.Buffer
 	writer := multipart.NewWriter(&buffer)
 	writeMultipartField(writer, "model", payload.Model)
-	writeMultipartField(writer, "prompt", prompt)
-	writeMultipartField(writer, "seconds", seconds)
+	writeMultipartField(writer, "prompt", payload.Prompt)
+	writeMultipartField(writer, "seconds", payload.Seconds)
 	writeMultipartField(writer, "size", payload.Size)
-	writeMultipartField(writer, "resolution_name", resolutionName)
+	writeMultipartField(writer, "resolution_name", payload.ResolutionName)
 	writeMultipartField(writer, "preset", payload.Preset)
-	writeMultipartField(writer, "ratio", payload.Ratio)
-	writeMultipartField(writer, "resolution", payload.Resolution)
-	writeMultipartField(writer, "duration", duration)
-	writeMultipartField(writer, "generate_audio", multipartFieldValue(payload.GenerateAudio))
-	writeMultipartField(writer, "watermark", multipartFieldValue(payload.Watermark))
-	for index, reference := range references {
+	for index, reference := range payload.InputReference {
 		if !strings.HasPrefix(strings.TrimSpace(reference), "data:") {
 			_ = writer.WriteField("input_reference[]", reference)
 			continue
@@ -312,11 +270,91 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 	return buffer.Bytes(), writer.FormDataContentType(), nil
 }
 
-func multipartFieldValue(value any) string {
-	if value == nil {
-		return ""
+// prepareUnifiedVideoJSONBody rewrites Ark-style seedance JSON (content array plus
+// native fields) into the new-api unified video JSON; other JSON passes through.
+func prepareUnifiedVideoJSONBody(body []byte, contentType string) ([]byte, string, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, "", err
 	}
-	return strings.TrimSpace(fmt.Sprint(value))
+	content, ok := payload["content"].([]any)
+	if !ok {
+		return body, contentType, nil
+	}
+	prompt, _ := payload["prompt"].(string)
+	images := []string{}
+	dropped := 0
+	for _, item := range content {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if text, ok := entry["text"].(string); ok && prompt == "" && strings.TrimSpace(text) != "" {
+			prompt = text
+		}
+		if url := nestedMediaURL(entry, "image_url"); url != "" {
+			images = append(images, url)
+		}
+		if nestedMediaURL(entry, "video_url") != "" || nestedMediaURL(entry, "audio_url") != "" {
+			dropped++
+		}
+	}
+	if dropped > 0 {
+		log.Printf("AI proxy unified video: dropped %d non-image references unsupported by /video/generations", dropped)
+	}
+	unified := map[string]any{"model": payload["model"], "prompt": prompt}
+	if duration, ok := unifiedVideoDuration(payload["duration"]); ok {
+		unified["duration"] = duration
+	}
+	metadata := map[string]any{}
+	for _, key := range []string{"ratio", "resolution", "generate_audio", "watermark"} {
+		if value, ok := payload[key]; ok && value != nil {
+			metadata[key] = value
+		}
+	}
+	if len(metadata) > 0 {
+		unified["metadata"] = metadata
+	}
+	if len(images) > 0 {
+		unified["image"] = images[0]
+		if len(images) > 1 {
+			unified["images"] = images
+		}
+	}
+	normalized, err := json.Marshal(unified)
+	if err != nil {
+		return nil, "", err
+	}
+	return normalized, contentType, nil
+}
+
+func unifiedVideoDuration(value any) (int, bool) {
+	var seconds int
+	switch duration := value.(type) {
+	case float64:
+		seconds = int(duration)
+	case int:
+		seconds = duration
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(duration))
+		if err != nil {
+			return 0, false
+		}
+		seconds = parsed
+	default:
+		return 0, false
+	}
+	if seconds <= 0 {
+		// ark duration -1 means adaptive; unified API needs a concrete value
+		return 6, true
+	}
+	return seconds, true
+}
+
+func nestedMediaURL(entry map[string]any, key string) string {
+	object, _ := entry[key].(map[string]any)
+	url, _ := object["url"].(string)
+	return strings.TrimSpace(url)
 }
 
 func prepareGrokVideoJSONBody(body []byte, contentType string, modelName string) ([]byte, string, error) {
@@ -627,20 +665,26 @@ func resolveAIProxyPath(baseURL string, modelName string, path string) string {
 	if isGrokPreviewVideo(modelName) && !isOfficialXAIBaseURL(baseURL) && path == "/videos/generations" {
 		return "/videos"
 	}
-	if !isArkSeedanceVideo(baseURL, modelName) {
+	if isArkSeedanceVideo(baseURL, modelName) {
+		if path == "/videos" || path == "/video/generations" {
+			return "/contents/generations/tasks"
+		}
+		if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
+			return "/contents/generations/tasks/" + strings.TrimPrefix(path, "/videos/")
+		}
+		if strings.HasPrefix(path, "/video/generations/") && !strings.HasSuffix(path, "/content") {
+			return "/contents/generations/tasks/" + strings.TrimPrefix(path, "/video/generations/")
+		}
 		return path
 	}
-	if path == "/videos" {
-		return "/contents/generations/tasks"
-	}
-	if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
-		return "/contents/generations/tasks/" + strings.TrimPrefix(path, "/videos/")
-	}
-	if path == "/video/generations" {
-		return "/contents/generations/tasks"
-	}
-	if strings.HasPrefix(path, "/video/generations/") && !strings.HasSuffix(path, "/content") {
-		return "/contents/generations/tasks/" + strings.TrimPrefix(path, "/video/generations/")
+	if strings.Contains(strings.ToLower(modelName), "seedance") {
+		// non-Ark seedance channels (SubRouter etc.) serve video on the unified JSON endpoint
+		if path == "/videos" {
+			return "/video/generations"
+		}
+		if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
+			return "/video/generations/" + strings.TrimPrefix(path, "/videos/")
+		}
 	}
 	return path
 }

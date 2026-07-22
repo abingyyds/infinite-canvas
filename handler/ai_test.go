@@ -3,8 +3,6 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
-	"mime"
-	"mime/multipart"
 	"strings"
 	"testing"
 )
@@ -58,9 +56,16 @@ func TestResolveAIProxyPathDowngradesSubRouterGrokVideoToVideos(t *testing.T) {
 	}
 }
 
-func TestResolveAIProxyPathKeepsSubRouterDoubaoSeedanceOnOpenAIVideos(t *testing.T) {
+func TestResolveAIProxyPathRoutesSubRouterDoubaoSeedanceToUnifiedVideo(t *testing.T) {
 	got := resolveAIProxyPath("https://subrouter.example.com/v1", "Doubao-Seedance-2.0", "/videos")
-	if got != "/videos" {
+	if got != "/video/generations" {
+		t.Fatalf("path = %q", got)
+	}
+}
+
+func TestResolveAIProxyPathRoutesSubRouterDoubaoSeedancePollToUnifiedVideo(t *testing.T) {
+	got := resolveAIProxyPath("https://subrouter.example.com/v1", "Doubao-Seedance-2.0", "/videos/task_abc")
+	if got != "/video/generations/task_abc" {
 		t.Fatalf("path = %q", got)
 	}
 }
@@ -86,70 +91,61 @@ func TestResolveAIProxyPathDoesNotRewriteNonSeedanceArkVideo(t *testing.T) {
 	}
 }
 
-func TestPrepareAIProxyBodyConvertsArkSeedanceJSONToMultipart(t *testing.T) {
+func TestPrepareAIProxyBodyConvertsArkSeedanceJSONToUnifiedJSON(t *testing.T) {
 	raw := []byte(`{"model":"Doubao-Seedance-2.0","content":[{"type":"text","text":"猫在草地奔跑"},{"type":"image_url","image_url":{"url":"https://example.com/ref.png"},"role":"reference_image"}],"ratio":"4:3","resolution":"720p","duration":10,"generate_audio":true,"watermark":false}`)
-	body, contentType, err := prepareAIProxyBody("/videos", "/videos", raw, "application/json")
+	body, contentType, err := prepareAIProxyBody("/videos", "/video/generations", raw, "application/json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(contentType, "multipart/form-data") {
+	if contentType != "application/json" {
 		t.Fatalf("contentType = %q", contentType)
 	}
-	form := parseMultipartTestForm(t, body, contentType)
-	for key, want := range map[string]string{
-		"model":           "Doubao-Seedance-2.0",
-		"prompt":          "猫在草地奔跑",
-		"ratio":           "4:3",
-		"resolution":      "720p",
-		"resolution_name": "720p",
-		"duration":        "10",
-		"seconds":         "10",
-		"generate_audio":  "true",
-		"watermark":       "false",
-	} {
-		if got := firstFormValue(form.Value[key]); got != want {
-			t.Fatalf("form[%q] = %q, want %q", key, got, want)
-		}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
 	}
-	if got := firstFormValue(form.Value["input_reference[]"]); got != "https://example.com/ref.png" {
-		t.Fatalf("input_reference = %q", got)
+	if payload["model"] != "Doubao-Seedance-2.0" || payload["prompt"] != "猫在草地奔跑" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	if payload["duration"] != float64(10) {
+		t.Fatalf("duration = %#v", payload["duration"])
+	}
+	if payload["image"] != "https://example.com/ref.png" {
+		t.Fatalf("image = %#v", payload["image"])
+	}
+	metadata, _ := payload["metadata"].(map[string]any)
+	if metadata["ratio"] != "4:3" || metadata["resolution"] != "720p" || metadata["generate_audio"] != true || metadata["watermark"] != false {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+	if _, ok := payload["content"]; ok {
+		t.Fatalf("payload keeps ark content: %#v", payload)
 	}
 }
 
-func TestPrepareAIProxyBodyMapsDynamicSeedanceDurationToDefaultSeconds(t *testing.T) {
+func TestPrepareAIProxyBodyMapsDynamicSeedanceDurationToDefault(t *testing.T) {
 	raw := []byte(`{"model":"Doubao-Seedance-2.0","content":[{"type":"text","text":"p"}],"duration":-1}`)
-	body, contentType, err := prepareAIProxyBody("/videos", "/videos", raw, "application/json")
+	body, _, err := prepareAIProxyBody("/videos", "/video/generations", raw, "application/json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	form := parseMultipartTestForm(t, body, contentType)
-	if got := firstFormValue(form.Value["seconds"]); got != "6" {
-		t.Fatalf("seconds = %q", got)
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
 	}
-	if got := firstFormValue(form.Value["duration"]); got != "-1" {
-		t.Fatalf("duration = %q", got)
+	if payload["duration"] != float64(6) {
+		t.Fatalf("duration = %#v", payload["duration"])
 	}
 }
 
-func parseMultipartTestForm(t *testing.T, body []byte, contentType string) *multipart.Form {
-	t.Helper()
-	_, params, err := mime.ParseMediaType(contentType)
+func TestPrepareAIProxyBodyKeepsUnifiedVideoJSONUntouched(t *testing.T) {
+	raw := []byte(`{"model":"seedance-2.0","prompt":"p","duration":6,"metadata":{"ratio":"16:9"}}`)
+	body, contentType, err := prepareAIProxyBody("/video/generations", "/video/generations", raw, "application/json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	form, err := multipart.NewReader(bytes.NewReader(body), params["boundary"]).ReadForm(32 << 20)
-	if err != nil {
-		t.Fatal(err)
+	if contentType != "application/json" || !bytes.Equal(body, raw) {
+		t.Fatalf("body = %s, contentType = %q", body, contentType)
 	}
-	t.Cleanup(func() { _ = form.RemoveAll() })
-	return form
-}
-
-func firstFormValue(values []string) string {
-	if len(values) == 0 {
-		return ""
-	}
-	return values[0]
 }
 
 func TestPrepareAIProxyBodyConvertsSubRouterGrokVideoToLegacyJSON(t *testing.T) {
