@@ -1,9 +1,11 @@
 import axios from "axios";
 
+import { isGatewayModel } from "@/services/gateway-channel";
 import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { useUserStore } from "@/stores/use-user-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
-import { dataUrlToFile } from "@/lib/image-utils";
+import { dataUrlToFile, normalizeImageDataUrlForUpload } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
@@ -112,6 +114,11 @@ const IMAGE_MAX_PIXELS = 8294400;
 const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
+
+/** 走内置网关时后端会扣算力点，出图后刷新余额。 */
+function refreshGatewayUser(config: AiConfig, model: string) {
+    if (isGatewayModel(config, model)) void useUserStore.getState().hydrateUser();
+}
 
 const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
 const GEMINI_IMAGE_SIZE_BY_QUALITY: Record<string, string> = { low: "1K", medium: "2K", high: "4K", standard: "1K", hd: "2K" };
@@ -711,6 +718,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             },
         );
         const images = parseImagePayload(response.data);
+        refreshGatewayUser(config, config.model || config.imageModel);
         return images;
     } catch (error) {
         throw new Error(readAxiosError(error, "请求失败"));
@@ -768,17 +776,83 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (background) {
         formData.set("background", background);
     }
-    const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
+    const referenceDataUrls = await Promise.all(references.map((image) => imageToDataUrl(image)));
+    if (referenceDataUrls.some((dataUrl) => !dataUrl?.startsWith("data:image/"))) {
+        throw new Error("参考图读取失败，请重新上传图片");
+    }
+    const normalizedReferences = await Promise.all(referenceDataUrls.map((dataUrl) => normalizeImageDataUrlForUpload(dataUrl || "")));
+    const files = references.map((image, index) => dataUrlToFile({ ...image, name: pngFileName(image.name, `reference-${index + 1}.png`), type: "image/png", dataUrl: normalizedReferences[index]?.dataUrl || "" }));
     files.forEach((file) => formData.append("image", file));
-    if (mask) formData.set("mask", dataUrlToFile(mask));
+    let normalizedMaskUrl = "";
+    if (mask) {
+        const firstReference = normalizedReferences[0];
+        normalizedMaskUrl = (await normalizeImageDataUrlForUpload(mask.dataUrl, firstReference ? { targetWidth: firstReference.width, targetHeight: firstReference.height } : undefined)).dataUrl;
+        formData.set("mask", dataUrlToFile({ ...mask, name: pngFileName(mask.name, "mask.png"), type: "image/png", dataUrl: normalizedMaskUrl }));
+    }
 
     try {
         const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal });
         const images = parseImagePayload(response.data);
+        refreshGatewayUser(config, config.model || config.imageModel);
         return images;
     } catch (error) {
-        throw new Error(readAxiosError(error, "请求失败"));
+        if (axios.isCancel(error) || options?.signal?.aborted) throw error;
+        const message = readAxiosError(error, "请求失败");
+        if (shouldRetryImageEditAsJson(message)) {
+            return requestEditJsonFallback(
+                requestConfig,
+                { prompt: requestPrompt, n, quality, size: requestSize, background },
+                normalizedReferences.map((image) => image.dataUrl),
+                normalizedMaskUrl || undefined,
+                message,
+                options,
+            );
+        }
+        throw new Error(message);
     }
+}
+
+function pngFileName(name: string | undefined, fallback: string) {
+    const value = (name || fallback).trim();
+    if (!value) return fallback;
+    return value.replace(/\.[^.]+$/, "") + ".png";
+}
+
+/** 部分兼容网关（SubRouter 等）不收 multipart 编辑上传，改用 JSON + base64 再试一次。 */
+async function requestEditJsonFallback(
+    config: AiConfig,
+    params: { prompt: string; n: number; quality?: string; size?: string; background?: string },
+    images: string[],
+    mask: string | undefined,
+    previousMessage: string,
+    options?: RequestOptions,
+) {
+    try {
+        const response = await axios.post<ImageApiResponse>(
+            aiApiUrl(config, "/images/edits"),
+            {
+                model: config.model,
+                prompt: withSystemPrompt(config, params.prompt),
+                n: params.n,
+                images,
+                ...(mask ? { mask } : {}),
+                ...(params.quality ? { quality: params.quality } : {}),
+                ...(params.size ? { size: params.size } : {}),
+                ...(params.background ? { background: params.background } : {}),
+                output_format: IMAGE_OUTPUT_FORMAT,
+                input_fidelity: "high",
+            },
+            { headers: aiHeaders(config, "application/json"), signal: options?.signal },
+        );
+        return parseImagePayload(response.data);
+    } catch (error) {
+        if (axios.isCancel(error) || options?.signal?.aborted) throw error;
+        throw new Error(readAxiosError(error, previousMessage || "请求失败"));
+    }
+}
+
+export function shouldRetryImageEditAsJson(message: string) {
+    return /image upload failed|check the image|invalid image|unsupported image|图片上传|图片格式/i.test(message);
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: AiTextMessage[], onDelta: (text: string) => void, options?: RequestOptions) {
