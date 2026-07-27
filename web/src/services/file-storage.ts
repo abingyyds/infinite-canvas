@@ -65,10 +65,18 @@ export function collectMediaStorageKeys(value: unknown, keys = new Set<string>()
     return keys;
 }
 
+// 后台标签页里 loadedmetadata 和 error 都可能不触发，必须兜底超时，
+// 否则整条生成流程会永远停在「生成中」，即使内容已经下载入库。
+const MEDIA_META_TIMEOUT_MS = 5000;
+
 function readVideoMeta(url: string) {
     return new Promise<{ width: number; height: number; durationMs?: number }>((resolve) => {
         const video = document.createElement("video");
-        const done = () => resolve({ width: video.videoWidth || 1280, height: video.videoHeight || 720, durationMs: Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : undefined });
+        const done = () => {
+            clearTimeout(timer);
+            resolve({ width: video.videoWidth || 1280, height: video.videoHeight || 720, durationMs: Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : undefined });
+        };
+        const timer = setTimeout(done, MEDIA_META_TIMEOUT_MS);
         video.onloadedmetadata = done;
         video.onerror = done;
         video.src = url;
@@ -78,7 +86,11 @@ function readVideoMeta(url: string) {
 function readAudioMeta(url: string) {
     return new Promise<{ durationMs?: number }>((resolve) => {
         const audio = document.createElement("audio");
-        const done = () => resolve({ durationMs: Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : undefined });
+        const done = () => {
+            clearTimeout(timer);
+            resolve({ durationMs: Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : undefined });
+        };
+        const timer = setTimeout(done, MEDIA_META_TIMEOUT_MS);
         audio.onloadedmetadata = done;
         audio.onerror = done;
         audio.src = url;
