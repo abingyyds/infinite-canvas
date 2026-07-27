@@ -41,6 +41,15 @@ function localPluginsManifest(): Plugin {
 export default defineConfig({
     base: process.env.VITE_BASE || "/",
     plugins: [react(), localPluginsManifest()],
+    // 本地开发把 /api/* 转发给 Go 后端；生产由 nginx 承担同样的转发。
+    server: {
+        proxy: {
+            "/api": {
+                target: process.env.API_BASE_URL || "http://127.0.0.1:18080",
+                changeOrigin: true,
+            },
+        },
+    },
     resolve: {
         alias: {
             "@": resolve(webDir, "src"),
