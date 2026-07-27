@@ -9,7 +9,7 @@ import type { WebdavSyncConfig } from "@/stores/use-config-store";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 
-type StoredLog = Record<string, unknown> & { id?: string };
+export type StoredLog = Record<string, unknown> & { id?: string };
 export type AppSyncDomainKey = "canvas" | "assets" | "image-workbench" | "video-workbench";
 type DomainKey = AppSyncDomainKey;
 type CanvasDomainData = { projects: CanvasProject[] };
@@ -75,8 +75,8 @@ export type AppSyncProgressEvent = {
 export type AppSyncProgress = (event: AppSyncProgressEvent) => void;
 
 const FILE_CONCURRENCY = 3;
-const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
-const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
+export const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
+export const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
 type LogStore = typeof imageLogStore;
 const storageKeyPattern = /^(image|video|audio|file|video-reference|audio-reference):/;
 
@@ -263,7 +263,7 @@ async function uploadChangedFiles<T>(config: WebdavSyncConfig, domain: DomainKey
     return { files, uploadedFiles, uploadedBytes };
 }
 
-async function hydrateAsset(asset: Asset): Promise<Asset> {
+export async function hydrateAsset(asset: Asset): Promise<Asset> {
     if (asset.kind === "image" && asset.data.storageKey) {
         const dataUrl = await resolveImageUrl(asset.data.storageKey, asset.data.dataUrl);
         return { ...asset, coverUrl: asset.coverUrl.startsWith("blob:") ? dataUrl : asset.coverUrl, data: { ...asset.data, dataUrl } };
@@ -275,7 +275,7 @@ async function hydrateAsset(asset: Asset): Promise<Asset> {
     return asset;
 }
 
-async function readStoredLogs(store: LogStore) {
+export async function readStoredLogs(store: LogStore) {
     const logs: StoredLog[] = [];
     await store.iterate<StoredLog, void>((value) => {
         if (value && typeof value === "object") logs.push(value);
@@ -283,7 +283,7 @@ async function readStoredLogs(store: LogStore) {
     return logs;
 }
 
-async function replaceStoredLogs(store: LogStore, logs: StoredLog[]) {
+export async function replaceStoredLogs(store: LogStore, logs: StoredLog[]) {
     await store.clear();
     await runWithConcurrency(logs, FILE_CONCURRENCY, async (log) => {
         const id = getStringField(log, "id");
@@ -291,7 +291,7 @@ async function replaceStoredLogs(store: LogStore, logs: StoredLog[]) {
     });
 }
 
-function mergeById<T extends { id?: string }>(local: T[], remote: T[], timeKey: string) {
+export function mergeById<T extends { id?: string }>(local: T[], remote: T[], timeKey: string) {
     const items = new Map<string, T>();
     remote.forEach((item) => {
         const id = item.id || "";
@@ -360,7 +360,7 @@ function fileExtension(mimeType: string, storageKey: string) {
     return storageKey.startsWith("image:") ? "png" : "bin";
 }
 
-function waitForHydration<T extends { hydrated: boolean }>(store: { getState: () => T; subscribe: (listener: (state: T) => void) => () => void }) {
+export function waitForHydration<T extends { hydrated: boolean }>(store: { getState: () => T; subscribe: (listener: (state: T) => void) => () => void }) {
     if (store.getState().hydrated) return Promise.resolve();
     return new Promise<void>((resolve) => {
         const unsubscribe = store.subscribe((state) => {
