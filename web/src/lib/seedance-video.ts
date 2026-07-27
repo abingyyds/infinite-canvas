@@ -61,9 +61,9 @@ export function isSeedanceVideoConfig(config: AiConfig | Pick<AiConfig, "model" 
     return isSeedanceVideoModel(modelOptionName(requestConfig.model || requestConfig.videoModel)) || isArkPlanBaseUrl(requestConfig.baseUrl);
 }
 
+// 只认火山方舟原生的 doubao-seedance；SubRouter 等兼容网关上的 seedance-* 走 OpenAI 风格的统一视频端点。
 export function isSeedanceVideoModel(model: string) {
-    const value = model.toLowerCase();
-    return value.includes("seedance") || value.includes("doubao-seedance");
+    return model.toLowerCase().includes("doubao-seedance");
 }
 
 export function isSeedanceFastModel(model: string) {
@@ -72,7 +72,8 @@ export function isSeedanceFastModel(model: string) {
 }
 
 export function isArkPlanBaseUrl(baseUrl: string) {
-    return baseUrl.toLowerCase().includes("ark.cn-beijing.volces.com/api/plan/v3") || baseUrl.toLowerCase().includes("/api/plan/v3");
+    const value = baseUrl.toLowerCase();
+    return value.includes("ark.cn-beijing.volces.com/api/v3") || value.includes("ark.cn-beijing.volces.com/api/plan/v3") || value.includes("/api/v3") || value.includes("/api/plan/v3");
 }
 
 export function normalizeSeedanceResolution(value: string, model = "") {
@@ -82,9 +83,13 @@ export function normalizeSeedanceResolution(value: string, model = "") {
 }
 
 export function normalizeResolutionToken(value: string) {
-    if (value === "low") return "480p";
-    if (value === "auto" || value === "high" || value === "medium") return "720p";
-    const resolution = String(value || "").replace(/p$/i, "") || "720";
+    const normalized = String(value || "")
+        .trim()
+        .toLowerCase();
+    if (normalized === "low") return "480p";
+    if (normalized === "auto" || normalized === "high" || normalized === "medium" || normalized === "hd") return "720p";
+    if (normalized === "fhd") return "1080p";
+    const resolution = normalized.replace(/p$/i, "") || "720";
     return `${resolution}p`;
 }
 

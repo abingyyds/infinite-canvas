@@ -2,13 +2,25 @@ import { type ReactNode } from "react";
 import { Switch } from "antd";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
+import { grokPreviewDurationOptions, isGrokImagineVideoModel, isGrokPreviewVideoModel, normalizeGrokPreviewSeconds } from "@/lib/grok-video";
 import { boolConfig, isSeedanceFastModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationOptions, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
-import { modelOptionName, type AiConfig } from "@/stores/use-config-store";
+import { modelMatchesCapability, modelOptionName, type AiConfig } from "@/stores/use-config-store";
 
 const resolutionOptions = [
-    { value: "720", label: "720p" },
+    { value: "360", label: "360p" },
     { value: "480", label: "480p" },
+    { value: "540", label: "540p" },
+    { value: "720", label: "720p" },
+    { value: "1080", label: "1080p" },
+    { value: "1440", label: "1440p" },
+    { value: "2160", label: "2160p" },
+];
+
+// Grok Imagine Video 官方只接受 480p / 720p。
+const grokResolutionOptions = [
+    { value: "480", label: "480p" },
+    { value: "720", label: "720p" },
 ];
 
 const sizeOptions = [
@@ -28,21 +40,30 @@ export const videoSecondOptions = secondOptions.map((value) => String(value));
 
 type VideoSettingsPanelProps = {
     config: AiConfig;
+    /** 当前生成用的视频模型；工作台里它和 config.model 不同，必须显式传入。 */
+    model?: string;
     onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     className?: string;
 };
 
-export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5" }: VideoSettingsPanelProps) {
-    if (isSeedanceVideoConfig(config)) {
-        return <SeedanceVideoSettingsPanel config={config} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} />;
+export function VideoSettingsPanel({ config, model: selectedModel, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5" }: VideoSettingsPanelProps) {
+    const model = resolveVideoSettingsModel(config, selectedModel);
+    if (isSeedanceVideoConfig({ ...config, model })) {
+        return <SeedanceVideoSettingsPanel config={config} model={selectedModel} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} />;
     }
 
-    const seconds = config.videoSeconds || "6";
+    const isGrokPreview = isGrokPreviewVideoModel(model);
+    const seconds = isGrokPreview ? normalizeGrokPreviewSeconds(config.videoSeconds, model) : config.videoSeconds || "6";
     const size = normalizeVideoSizeValue(config.size);
     const dimensions = readSizeDimensions(size);
-    const resolution = normalizeVideoResolutionValue(config.vquality);
+    const currentResolutionOptions = videoResolutionOptionsForModel(model);
+    const resolution = normalizeVideoResolutionForModel(config.vquality, model);
+    const showResolutionInput = !isGrokImagineVideoModel(model);
+    const currentSizeOptions = isGrokPreview ? sizeOptions.filter((item) => item.value !== "auto") : sizeOptions;
+    const currentSecondOptions = isGrokPreview ? grokPreviewDurationOptions : secondOptions;
+    const maxSeconds = isGrokPreview ? 15 : 20;
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 720));
         onConfigChange("size", `${key === "width" ? next : dimensions.width}x${key === "height" ? next : dimensions.height}`);
@@ -52,16 +73,18 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
         <ImageSettingsTheme theme={theme}>
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
                 {showTitle ? <div className="text-lg font-semibold">视频设置</div> : null}
-                <SettingGroup title="清晰度" color={theme.node.muted}>
-                    <div className="grid grid-cols-3 gap-2.5">
-                        {resolutionOptions.map((item) => (
-                            <OptionPill key={item.value} selected={resolution === item.value} theme={theme} onClick={() => onConfigChange("vquality", item.value)}>
-                                {item.label}
-                            </OptionPill>
-                        ))}
-                        <ResolutionInput value={resolution} theme={theme} onChange={(value) => onConfigChange("vquality", value)} />
-                    </div>
-                </SettingGroup>
+                {isGrokPreview ? null : (
+                    <SettingGroup title="清晰度" color={theme.node.muted}>
+                        <div className="grid grid-cols-3 gap-2.5">
+                            {currentResolutionOptions.map((item) => (
+                                <OptionPill key={item.value} selected={resolution === item.value} theme={theme} onClick={() => onConfigChange("vquality", item.value)}>
+                                    {item.label}
+                                </OptionPill>
+                            ))}
+                            {showResolutionInput ? <ResolutionInput value={resolution} theme={theme} onChange={(value) => onConfigChange("vquality", value)} /> : null}
+                        </div>
+                    </SettingGroup>
+                )}
                 <SettingGroup title="尺寸" color={theme.node.muted}>
                     <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2.5">
                         <DimensionInput prefix="W" value={dimensions.width} disabled={size === "auto"} theme={theme} onChange={(value) => updateDimension("width", value)} />
@@ -69,7 +92,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         <DimensionInput prefix="H" value={dimensions.height} disabled={size === "auto"} theme={theme} onChange={(value) => updateDimension("height", value)} />
                     </div>
                     <div className="grid grid-cols-3 gap-2.5">
-                        {sizeOptions.map((item) => (
+                        {currentSizeOptions.map((item) => (
                             <button
                                 key={item.value}
                                 type="button"
@@ -91,12 +114,12 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 </SettingGroup>
                 <SettingGroup title="秒数" color={theme.node.muted}>
                     <div className="grid grid-cols-3 gap-2.5">
-                        {secondOptions.map((value) => (
+                        {currentSecondOptions.map((value) => (
                             <OptionPill key={value} selected={seconds === String(value)} theme={theme} onClick={() => onConfigChange("videoSeconds", String(value))}>
                                 {value}s
                             </OptionPill>
                         ))}
-                        <NumberInput value={seconds} min={1} max={20} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
+                        <NumberInput value={seconds} min={1} max={maxSeconds} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
                     </div>
                 </SettingGroup>
             </div>
@@ -104,8 +127,8 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
     );
 }
 
-function SeedanceVideoSettingsPanel({ config, onConfigChange, theme, showTitle, className }: VideoSettingsPanelProps) {
-    const model = modelOptionName(config.model || config.videoModel);
+function SeedanceVideoSettingsPanel({ config, model: selectedModel, onConfigChange, theme, showTitle, className }: VideoSettingsPanelProps) {
+    const model = resolveVideoSettingsModel(config, selectedModel);
     const resolution = normalizeSeedanceResolution(config.vquality, model);
     const ratio = normalizeSeedanceRatio(config.size);
     const duration = normalizeSeedanceDuration(config.videoSeconds);
@@ -191,10 +214,33 @@ export function normalizeVideoSizeValue(value: string) {
     return ["9:16", "2:3", "3:4"].includes(value) ? "720x1280" : "1280x720";
 }
 
+/** 画布节点里 config.model 就是当前生成模型；工作台里 config.model 可能是别的能力的模型，需要调用方传入。 */
+function resolveVideoSettingsModel(config: AiConfig, selectedModel?: string) {
+    if (selectedModel?.trim()) return modelOptionName(selectedModel);
+    return modelOptionName(modelMatchesCapability(config, config.model, "video") ? config.model : config.videoModel);
+}
+
+function videoResolutionOptionsForModel(model: string) {
+    return isGrokImagineVideoModel(model) ? grokResolutionOptions : resolutionOptions;
+}
+
+function normalizeVideoResolutionForModel(value: string, model: string) {
+    const resolution = normalizeVideoResolutionValue(value);
+    if (!isGrokImagineVideoModel(model)) return resolution;
+    return resolution === "480" ? "480" : "720";
+}
+
 export function normalizeVideoResolutionValue(value: string) {
-    if (value === "480p" || value === "low") return "480";
-    if (value === "720p" || value === "auto" || value === "high" || value === "medium") return "720";
-    return value.replace(/p$/i, "") || "720";
+    const normalized = String(value || "")
+        .trim()
+        .toLowerCase();
+    if (normalized === "480p" || normalized === "low") return "480";
+    if (normalized === "720p" || normalized === "auto" || normalized === "high" || normalized === "medium" || normalized === "hd") return "720";
+    if (normalized === "fhd") return "1080";
+    if (normalized === "2k" || normalized === "qhd") return "1440";
+    if (normalized === "4k" || normalized === "uhd") return "2160";
+    const resolution = normalized.replace(/p$/i, "");
+    return /^\d+$/.test(resolution) ? resolution : "720";
 }
 
 function OptionPill({ selected, disabled = false, theme, onClick, children }: { selected: boolean; disabled?: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {
