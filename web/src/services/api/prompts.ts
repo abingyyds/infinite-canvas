@@ -223,3 +223,16 @@ export function formatPromptDate(value: string) {
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 }
+
+/** 白名单图床的封面走后端代理，绕开第三方防盗链并让浏览器命中缓存。 */
+export function getPromptImageUrl(coverUrl: string) {
+    const value = (coverUrl || "").trim();
+    if (!value || value.startsWith("/") || value.startsWith("data:") || value.startsWith("blob:")) return value;
+    try {
+        const url = new URL(value);
+        if (url.protocol !== "https:") return value;
+        return `/api/prompt-image?url=${encodeURIComponent(url.toString())}`;
+    } catch {
+        return value;
+    }
+}
