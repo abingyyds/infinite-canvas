@@ -29,14 +29,6 @@ const neutral = {
     },
 };
 
-export const adminLayoutStyle = {
-    siderWidth: 232,
-    headerHeight: 56,
-    brandHeight: 64,
-    menu: { borderInlineEnd: 0, padding: "18px 12px", fontSize: 15 } satisfies CSSProperties,
-    menuItem: { height: 44, lineHeight: "44px", marginBlock: 4, borderRadius: 8 } satisfies CSSProperties,
-};
-
 export function getAntThemeConfig(dark: boolean): ThemeConfig {
     const color = dark ? neutral.dark : neutral.light;
 
@@ -76,3 +68,11 @@ export function getAntThemeConfig(dark: boolean): ThemeConfig {
         },
     };
 }
+
+export const adminLayoutStyle = {
+    siderWidth: 232,
+    headerHeight: 56,
+    brandHeight: 64,
+    menu: { borderInlineEnd: 0, padding: "18px 12px", fontSize: 15 } satisfies CSSProperties,
+    menuItem: { height: 44, lineHeight: "44px", marginBlock: 4, borderRadius: 8 } satisfies CSSProperties,
+};

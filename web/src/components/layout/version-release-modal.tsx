@@ -1,5 +1,3 @@
-"use client";
-
 import type { CSSProperties } from "react";
 import { Modal, Tag, Timeline } from "antd";
 import { useVersionCheck } from "@/hooks/use-version-check";

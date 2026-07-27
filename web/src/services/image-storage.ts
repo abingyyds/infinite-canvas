@@ -1,10 +1,7 @@
-"use client";
-
 import localforage from "localforage";
 
 import { nanoid } from "nanoid";
 import { readImageMeta } from "@/lib/image-utils";
-import { currentUserScope } from "@/lib/user-scope";
 
 export type UploadedImage = {
     url: string;
@@ -20,7 +17,7 @@ const objectUrls = new Map<string, string>();
 
 export async function uploadImage(input: string | Blob): Promise<UploadedImage> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
-    const storageKey = `${imageStoragePrefix()}${nanoid()}`;
+    const storageKey = `image:${nanoid()}`;
     await store.setItem(storageKey, blob);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
@@ -33,7 +30,7 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
     const blob = await store.getItem<Blob>(storageKey);
-    if (!blob) return fallback.startsWith("blob:") ? "" : fallback;
+    if (!blob) return fallback;
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
@@ -51,17 +48,9 @@ export async function setImageBlob(storageKey: string, blob: Blob) {
 }
 
 export async function imageToDataUrl(image: { url?: string; dataUrl?: string; storageKey?: string }) {
-    if (image.storageKey) {
-        const blob = await getImageBlob(image.storageKey);
-        if (blob) return blobToDataUrl(blob);
-    }
-    const url = image.dataUrl || image.url || "";
+    const url = image.dataUrl || (await resolveImageUrl(image.storageKey, image.url || ""));
     if (!url || url.startsWith("data:")) return url;
-    try {
-        return blobToDataUrl(await (await fetch(url)).blob());
-    } catch {
-        throw new Error(url.startsWith("blob:") ? "参考图已失效，请重新上传图片" : "参考图读取失败，请换一张图片或重新上传");
-    }
+    return blobToDataUrl(await (await fetch(url)).blob());
 }
 
 export async function deleteStoredImages(keys: Iterable<string>) {
@@ -77,10 +66,9 @@ export async function deleteStoredImages(keys: Iterable<string>) {
 
 export async function cleanupUnusedImages(usedData: unknown) {
     const usedKeys = collectImageStorageKeys(usedData);
-    const prefix = imageStoragePrefix();
     const unused: string[] = [];
     await store.iterate((_value, key) => {
-        if (key.startsWith(prefix) && !usedKeys.has(key)) unused.push(key);
+        if (!usedKeys.has(key)) unused.push(key);
     });
     await deleteStoredImages(unused);
 }
@@ -99,8 +87,4 @@ function blobToDataUrl(blob: Blob) {
         reader.onerror = () => reject(new Error("读取图片失败"));
         reader.readAsDataURL(blob);
     });
-}
-
-function imageStoragePrefix() {
-    return `image:${currentUserScope()}:`;
 }

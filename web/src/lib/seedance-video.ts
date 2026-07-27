@@ -1,4 +1,4 @@
-import type { AiConfig } from "@/stores/use-config-store";
+import { modelOptionName, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
@@ -56,13 +56,14 @@ const seedancePixels = {
     },
 } as const;
 
-export function isSeedanceVideoConfig(config: Pick<AiConfig, "model" | "videoModel" | "baseUrl">) {
-    return isSeedanceVideoModel(config.model || config.videoModel) || isArkPlanBaseUrl(config.baseUrl);
+export function isSeedanceVideoConfig(config: AiConfig | Pick<AiConfig, "model" | "videoModel" | "baseUrl">) {
+    const requestConfig = "channels" in config ? resolveModelRequestConfig(config, config.model || config.videoModel) : config;
+    return isSeedanceVideoModel(modelOptionName(requestConfig.model || requestConfig.videoModel)) || isArkPlanBaseUrl(requestConfig.baseUrl);
 }
 
+// 只认火山方舟原生的 doubao-seedance；SubRouter 等兼容网关上的 seedance-* 走 OpenAI 风格的统一视频端点。
 export function isSeedanceVideoModel(model: string) {
-    const value = model.toLowerCase();
-    return value.includes("doubao-seedance");
+    return model.toLowerCase().includes("doubao-seedance");
 }
 
 export function isSeedanceFastModel(model: string) {
@@ -82,7 +83,9 @@ export function normalizeSeedanceResolution(value: string, model = "") {
 }
 
 export function normalizeResolutionToken(value: string) {
-    const normalized = String(value || "").trim().toLowerCase();
+    const normalized = String(value || "")
+        .trim()
+        .toLowerCase();
     if (normalized === "low") return "480p";
     if (normalized === "auto" || normalized === "high" || normalized === "medium" || normalized === "hd") return "720p";
     if (normalized === "fhd") return "1080p";
@@ -143,7 +146,7 @@ export function buildSeedancePromptText(prompt: string, images: ReferenceImage[]
     ];
     const text = prompt.trim();
     if (!labels.length) return text;
-    return `参考素材编号：${labels.join("、")}。请按这些编号理解提示词中的图片、视频和音频引用。\n\n${text}`;
+    return `参考资产编号：${labels.join("、")}。请按这些编号理解提示词中的图片、视频和音频引用。\n\n${text}`;
 }
 
 export function seedanceVideoReferenceError(videos: ReferenceVideo[]) {
@@ -168,4 +171,4 @@ export function seedanceVideoReferenceError(videos: ReferenceVideo[]) {
     return "";
 }
 
-export const seedanceVideoReferenceHint = "参考视频需为 mp4/mov，H.264/H.265，FPS 24-60；含真人人脸素材请使用火山授权 asset:// 素材。";
+export const seedanceVideoReferenceHint = "参考视频需为 mp4/mov，H.264/H.265，FPS 24-60；含真人人脸资产请使用火山授权 asset:// 资产。";

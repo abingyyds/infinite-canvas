@@ -28,7 +28,7 @@ export function baseOptions(): BaseLayoutProps {
             <ArrowUpRight className="size-4" />
           </span>
         ),
-        url: 'https://infinite-canvas-cpco.onrender.com/',
+        url: 'https://canvas.best/',
         external: true,
         on: 'nav',
       },

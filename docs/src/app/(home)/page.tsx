@@ -3,7 +3,7 @@ import { ArrowUpRight, BookOpen, Rocket } from 'lucide-react';
 import { appName, gitConfig } from '@/lib/shared';
 
 const githubUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
-const demoUrl = 'https://infinite-canvas-cpco.onrender.com/';
+const demoUrl = 'https://canvas.best/';
 const starHistoryUrl = `https://www.star-history.com/?repos=${gitConfig.user}%2F${gitConfig.repo}&type=date`;
 const starHistoryChart = `https://api.star-history.com/chart?repos=${gitConfig.user}/${gitConfig.repo}&type=date&transparent=true`;
 const darkStarHistoryChart = `${starHistoryChart}&theme=dark`;

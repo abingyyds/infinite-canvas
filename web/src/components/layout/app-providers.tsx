@@ -1,5 +1,3 @@
-"use client";
-
 import type { ReactNode } from "react";
 import { useEffect } from "react";
 import { ProConfigProvider } from "@ant-design/pro-components";

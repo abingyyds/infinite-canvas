@@ -1,9 +1,9 @@
-# 构建 Next.js 前端产物。
+# 构建 Vite 前端产物。
 FROM oven/bun:1.3.13 AS web-build
 
 WORKDIR /app/web
 COPY web/package.json web/bun.lock ./
-RUN bun install --frozen-lockfile
+RUN --mount=type=cache,target=/root/.bun/install/cache bun install --cache-dir=/root/.bun/install/cache
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
@@ -24,22 +24,18 @@ COPY service ./service
 COPY main.go ./
 RUN go build -o /server .
 
-# 运行镜像：Next.js 对外监听 Railway 注入的 PORT，Go 只在容器内部监听 API_PORT。
-FROM node:22-bookworm-slim
+# 运行镜像：nginx 对外提供静态前端，并把 /api/* 转发给容器内的 Go 后端。
+FROM nginx:1.27-alpine
 
-WORKDIR /app
-COPY VERSION /app/VERSION
-COPY CHANGELOG.md /app/CHANGELOG.md
+ENV PORT=3000
+ENV API_PORT=18080
+
+COPY --from=web-build /app/web/dist /usr/share/nginx/html
 COPY --from=api-build /server /app/server
-COPY --from=web-build /app/web/public /app/web/public
-COPY --from=web-build /app/web/.next/standalone /app/web
-COPY --from=web-build /app/web/.next/static /app/web/.next/static
-ENV NODE_ENV=production
-ENV HOSTNAME=0.0.0.0
-ENV PROMPT_DATA_DIR=/app/data/prompts
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
-RUN mkdir -p /app/data/prompts
+# 官方镜像的 20-envsubst-on-templates.sh 会把 ${PORT}/${API_PORT} 渲染进 default.conf。
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+COPY web/docker-entrypoint.sh /docker-entrypoint.d/40-runtime-config.sh
+COPY docker-entrypoint-api.sh /docker-entrypoint.d/50-start-api.sh
+RUN chmod +x /docker-entrypoint.d/40-runtime-config.sh /docker-entrypoint.d/50-start-api.sh
 
 EXPOSE 3000
-# 先启动内部 Go API，再由 Next.js 提供页面并代理 /api/*。
-CMD ["sh", "-c", "API_PORT=${API_PORT:-18080}; PORT=$API_PORT /app/server & cd /app/web && API_BASE_URL=http://127.0.0.1:$API_PORT PORT=${PORT:-3000} node server.js"]

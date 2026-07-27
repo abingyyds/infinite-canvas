@@ -1,8 +1,5 @@
-"use client";
-
 import localforage from "localforage";
 import { nanoid } from "nanoid";
-import { currentUserScope } from "@/lib/user-scope";
 
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number };
 
@@ -11,7 +8,7 @@ const objectUrls = new Map<string, string>();
 
 export async function uploadMediaFile(input: string | Blob, prefix = "file"): Promise<UploadedFile> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
-    const storageKey = `${mediaStoragePrefix(prefix)}${nanoid()}`;
+    const storageKey = `${prefix}:${nanoid()}`;
     await store.setItem(storageKey, blob);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
@@ -56,7 +53,7 @@ export async function cleanupUnusedMedia(usedData: unknown) {
     const usedKeys = collectMediaStorageKeys(usedData);
     const unused: string[] = [];
     await store.iterate((_value, key) => {
-        if (isCurrentUserMediaKey(key) && !usedKeys.has(key)) unused.push(key);
+        if (!usedKeys.has(key)) unused.push(key);
     });
     await Promise.all(unused.map((key) => store.removeItem(key)));
 }
@@ -68,10 +65,18 @@ export function collectMediaStorageKeys(value: unknown, keys = new Set<string>()
     return keys;
 }
 
+// 后台标签页里 loadedmetadata 和 error 都可能不触发，必须兜底超时，
+// 否则整条生成流程会永远停在「生成中」，即使内容已经下载入库。
+const MEDIA_META_TIMEOUT_MS = 5000;
+
 function readVideoMeta(url: string) {
     return new Promise<{ width: number; height: number; durationMs?: number }>((resolve) => {
         const video = document.createElement("video");
-        const done = () => resolve({ width: video.videoWidth || 1280, height: video.videoHeight || 720, durationMs: Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : undefined });
+        const done = () => {
+            clearTimeout(timer);
+            resolve({ width: video.videoWidth || 1280, height: video.videoHeight || 720, durationMs: Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : undefined });
+        };
+        const timer = setTimeout(done, MEDIA_META_TIMEOUT_MS);
         video.onloadedmetadata = done;
         video.onerror = done;
         video.src = url;
@@ -81,20 +86,13 @@ function readVideoMeta(url: string) {
 function readAudioMeta(url: string) {
     return new Promise<{ durationMs?: number }>((resolve) => {
         const audio = document.createElement("audio");
-        const done = () => resolve({ durationMs: Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : undefined });
+        const done = () => {
+            clearTimeout(timer);
+            resolve({ durationMs: Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : undefined });
+        };
+        const timer = setTimeout(done, MEDIA_META_TIMEOUT_MS);
         audio.onloadedmetadata = done;
         audio.onerror = done;
         audio.src = url;
     });
-}
-
-function mediaStoragePrefix(prefix: string) {
-    return `${prefix}:${currentUserScope()}:`;
-}
-
-function isCurrentUserMediaKey(key: string) {
-    const parts = key.split(":");
-    if (parts.length < 3) return false;
-    if (!["video", "audio", "file", "video-reference", "audio-reference"].includes(parts[0])) return false;
-    return parts[1] === currentUserScope();
 }

@@ -1,9 +1,9 @@
 {
-  "title": "赞助支持",
+  "title": "支持与安全",
   "root": true,
   "defaultOpen": true,
   "pages": [
-    "donate",
+    "security",
     "sponsor"
   ]
 }

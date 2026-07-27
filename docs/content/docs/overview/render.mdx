@@ -13,7 +13,7 @@ description: 使用 Render 部署无限画布
 
 1. 点击 `Deploy to Render`。
 2. 登录 Render，并按页面提示连接 GitHub。
-3. 填写 `ADMIN_PASSWORD`，然后点击确认部署。
+3. 确认部署。
 
 部署完成后，打开 Render 分配的 `.onrender.com` 域名即可访问。
 
@@ -22,17 +22,7 @@ description: 使用 Render 部署无限画布
 默认使用 Render 免费 Web Service：
 
 - 空闲约 15 分钟后会休眠，下次访问会自动唤醒。
-- 免费版本地文件不是持久化存储，SQLite 数据可能在重启、重新部署后丢失。
+- 当前主应用数据默认保存在浏览器本地；第三方提示词由浏览器前端直连拉取。
 - 适合体验和演示，不适合长期保存正式数据。
 
-如果要长期使用，建议升级 Render 付费实例并挂载 Persistent Disk，或改用 PostgreSQL。
-
-## 管理员账号
-
-默认管理员用户名：
-
-```text
-admin
-```
-
-管理员密码是在 Render 部署页面里填写的 `ADMIN_PASSWORD`。
+长期使用建议优先部署到 Vercel，或自行配置 WebDAV 同步浏览器本地数据。

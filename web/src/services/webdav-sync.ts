@@ -1,5 +1,3 @@
-"use client";
-
 import type { WebdavSyncConfig } from "@/stores/use-config-store";
 
 export const WEBDAV_MANIFEST_FILE_NAME = "manifest.json";
@@ -55,7 +53,7 @@ async function ensureWebdavSubdirectory(config: WebdavSyncConfig, path: string) 
 
 async function ensureWebdavDirectoryPath(config: WebdavSyncConfig, directory: string) {
     const parts = normalizePath(directory).split("/").filter(Boolean);
-    const cacheKey = `${config.proxyMode}:${config.url}:${parts.join("/")}`;
+    const cacheKey = `${config.url}:${parts.join("/")}`;
     if (ensuredDirectories.has(cacheKey)) return;
     let path = "";
     for (const part of parts) {
@@ -79,41 +77,14 @@ async function webdavFetch(config: WebdavSyncConfig, path: string, init: Request
     const timer = window.setTimeout(() => controller.abort(), WEBDAV_REQUEST_TIMEOUT_MS);
     try {
         const url = buildWebdavUrl(config, path);
-        if (config.proxyMode === "nextjs") return await fetch("/webdav-proxy", { method: "POST", headers: proxyHeaders(url, init.method || "GET", headers), body: proxyBody(init), signal: controller.signal });
         return await fetch(url, { ...init, headers, signal: controller.signal });
     } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") throw new Error("WebDAV 请求超时，请检查网络、代理或远端服务状态");
+        if (error instanceof Error && error.name === "AbortError") throw new Error("WebDAV 请求超时，请检查网络或远端服务状态");
         if (error instanceof TypeError) throw new Error("无法连接 WebDAV，请检查地址、HTTPS 证书、CORS 或网络状态");
         throw error;
     } finally {
         window.clearTimeout(timer);
     }
-}
-
-function proxyHeaders(target: string, method: string, headers: Headers) {
-    const proxyHeaders = new Headers({
-        "x-webdav-target": target,
-        "x-webdav-method": method,
-    });
-    copyProxyHeader(headers, proxyHeaders, "Authorization", "x-webdav-authorization");
-    copyProxyHeader(headers, proxyHeaders, "Depth", "x-webdav-depth");
-    copyProxyHeader(headers, proxyHeaders, "Destination", "x-webdav-destination");
-    copyProxyHeader(headers, proxyHeaders, "Overwrite", "x-webdav-overwrite");
-    copyProxyHeader(headers, proxyHeaders, "Content-Type", "x-webdav-content-type");
-    const contentType = headers.get("Content-Type");
-    if (contentType) proxyHeaders.set("Content-Type", contentType);
-    return proxyHeaders;
-}
-
-function copyProxyHeader(from: Headers, to: Headers, source: string, target: string) {
-    const value = from.get(source);
-    if (value) to.set(target, value);
-}
-
-function proxyBody(init: RequestInit) {
-    const method = (init.method || "GET").toUpperCase();
-    if (method === "GET" || method === "HEAD") return undefined;
-    return init.body || undefined;
 }
 
 function buildWebdavUrl(config: WebdavSyncConfig, path: string) {

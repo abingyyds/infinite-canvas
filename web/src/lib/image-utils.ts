@@ -1,9 +1,5 @@
 import type { ReferenceImage } from "@/types/image";
 
-const DEFAULT_UPLOAD_MAX_EDGE = 2048;
-const DEFAULT_UPLOAD_MAX_BYTES = 15 * 1024 * 1024;
-const MIN_UPLOAD_EDGE = 512;
-
 export function formatBytes(bytes: number) {
     if (!Number.isFinite(bytes) || bytes <= 0) {
         return "";
@@ -54,6 +50,11 @@ export function readImageMeta(dataUrl: string) {
     });
 }
 
+const DEFAULT_UPLOAD_MAX_EDGE = 2048;
+const DEFAULT_UPLOAD_MAX_BYTES = 15 * 1024 * 1024;
+const MIN_UPLOAD_EDGE = 512;
+
+/** 统一转成 PNG 并压到边长/体积上限内；部分网关会拒收过大或非 PNG 的编辑上传。 */
 export async function normalizeImageDataUrlForUpload(dataUrl: string, options: { maxEdge?: number; maxBytes?: number; targetWidth?: number; targetHeight?: number } = {}) {
     const image = await loadImage(dataUrl);
     const sourceWidth = image.naturalWidth || image.width || 1024;
@@ -84,17 +85,6 @@ export async function normalizeImageDataUrlForUpload(dataUrl: string, options: {
     return { dataUrl: normalized, width, height, bytes: getDataUrlByteSize(normalized), mimeType: "image/png" };
 }
 
-export function dataUrlToFile(image: ReferenceImage) {
-    const [header, content] = image.dataUrl.split(",", 2);
-    const mimeType = header.match(/data:(.*?);base64/)?.[1] || image.type || "image/png";
-    const binary = atob(content || "");
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.charCodeAt(index);
-    }
-    return new File([bytes], image.name || "reference.png", { type: mimeType });
-}
-
 function loadImage(dataUrl: string) {
     return new Promise<HTMLImageElement>((resolve, reject) => {
         const image = new Image();
@@ -112,4 +102,15 @@ function drawImageToPngDataUrl(image: HTMLImageElement, width: number, height: n
     if (!context) throw new Error("参考图处理失败，请重新上传图片");
     context.drawImage(image, 0, 0, width, height);
     return canvas.toDataURL("image/png");
+}
+
+export function dataUrlToFile(image: ReferenceImage) {
+    const [header, content] = image.dataUrl.split(",", 2);
+    const mimeType = header.match(/data:(.*?);base64/)?.[1] || image.type || "image/png";
+    const binary = atob(content || "");
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+    }
+    return new File([bytes], image.name || "reference.png", { type: mimeType });
 }

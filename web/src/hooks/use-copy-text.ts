@@ -1,5 +1,3 @@
-"use client";
-
 import { App } from "antd";
 import copy from "copy-to-clipboard";
 

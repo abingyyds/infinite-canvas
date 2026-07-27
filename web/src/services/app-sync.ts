@@ -1,5 +1,3 @@
-"use client";
-
 import localforage from "localforage";
 
 import { getMediaBlob, resolveMediaUrl, setMediaBlob } from "@/services/file-storage";
@@ -8,11 +6,10 @@ import { downloadWebdavFile, uploadWebdavFile, WEBDAV_MANIFEST_FILE_NAME } from 
 import type { Asset } from "@/stores/use-asset-store";
 import { useAssetStore } from "@/stores/use-asset-store";
 import type { WebdavSyncConfig } from "@/stores/use-config-store";
-import type { CanvasProject } from "@/app/(user)/canvas/stores/use-canvas-store";
-import { useCanvasStore } from "@/app/(user)/canvas/stores/use-canvas-store";
-import { scopedStoreKey } from "@/lib/user-scope";
+import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
+import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 
-type StoredLog = Record<string, unknown> & { id?: string };
+export type StoredLog = Record<string, unknown> & { id?: string };
 export type AppSyncDomainKey = "canvas" | "assets" | "image-workbench" | "video-workbench";
 type DomainKey = AppSyncDomainKey;
 type CanvasDomainData = { projects: CanvasProject[] };
@@ -78,10 +75,8 @@ export type AppSyncProgressEvent = {
 export type AppSyncProgress = (event: AppSyncProgressEvent) => void;
 
 const FILE_CONCURRENCY = 3;
-const IMAGE_LOG_STORE_KEY = "infinite-canvas:image_generation_logs";
-const VIDEO_LOG_STORE_KEY = "infinite-canvas:video_generation_logs";
-const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
-const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
+export const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
+export const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
 type LogStore = typeof imageLogStore;
 const storageKeyPattern = /^(image|video|audio|file|video-reference|audio-reference):/;
 
@@ -100,7 +95,7 @@ export async function syncAppDataToWebdav(config: WebdavSyncConfig, onProgress?:
         }),
         syncDomain<AssetDomainData>(config, onProgress, {
             key: "assets",
-            label: "我的素材",
+            label: "我的资产",
             emptyData: { assets: [] },
             localData: async () => ({ assets: useAssetStore.getState().assets }),
             mergeData: (local, remote) => ({ assets: mergeById(local.assets, remote.assets, "updatedAt") }),
@@ -110,17 +105,17 @@ export async function syncAppDataToWebdav(config: WebdavSyncConfig, onProgress?:
             key: "image-workbench",
             label: "生图工作台",
             emptyData: { logs: [] },
-            localData: async () => ({ logs: await readScopedStoredLogs(imageLogStore, IMAGE_LOG_STORE_KEY) }),
+            localData: async () => ({ logs: await readStoredLogs(imageLogStore) }),
             mergeData: (local, remote) => ({ logs: mergeById(local.logs, remote.logs, "createdAt") }),
-            applyData: async (data) => replaceScopedStoredLogs(imageLogStore, IMAGE_LOG_STORE_KEY, data.logs),
+            applyData: async (data) => replaceStoredLogs(imageLogStore, data.logs),
         }),
         syncDomain<LogDomainData>(config, onProgress, {
             key: "video-workbench",
             label: "视频创作台",
             emptyData: { logs: [] },
-            localData: async () => ({ logs: await readScopedStoredLogs(videoLogStore, VIDEO_LOG_STORE_KEY) }),
+            localData: async () => ({ logs: await readStoredLogs(videoLogStore) }),
             mergeData: (local, remote) => ({ logs: mergeById(local.logs, remote.logs, "createdAt") }),
-            applyData: async (data) => replaceScopedStoredLogs(videoLogStore, VIDEO_LOG_STORE_KEY, data.logs),
+            applyData: async (data) => replaceStoredLogs(videoLogStore, data.logs),
         }),
     ]);
 
@@ -268,7 +263,7 @@ async function uploadChangedFiles<T>(config: WebdavSyncConfig, domain: DomainKey
     return { files, uploadedFiles, uploadedBytes };
 }
 
-async function hydrateAsset(asset: Asset): Promise<Asset> {
+export async function hydrateAsset(asset: Asset): Promise<Asset> {
     if (asset.kind === "image" && asset.data.storageKey) {
         const dataUrl = await resolveImageUrl(asset.data.storageKey, asset.data.dataUrl);
         return { ...asset, coverUrl: asset.coverUrl.startsWith("blob:") ? dataUrl : asset.coverUrl, data: { ...asset.data, dataUrl } };
@@ -280,29 +275,23 @@ async function hydrateAsset(asset: Asset): Promise<Asset> {
     return asset;
 }
 
-export async function readScopedStoredLogs(store: LogStore, baseKey: string) {
+export async function readStoredLogs(store: LogStore) {
     const logs: StoredLog[] = [];
-    const prefix = `${scopedStoreKey(baseKey)}:`;
-    await store.iterate<StoredLog, void>((value, key) => {
-        if (key.startsWith(prefix) && value && typeof value === "object") logs.push(value);
+    await store.iterate<StoredLog, void>((value) => {
+        if (value && typeof value === "object") logs.push(value);
     });
     return logs;
 }
 
-export async function replaceScopedStoredLogs(store: LogStore, baseKey: string, logs: StoredLog[]) {
-    const prefix = `${scopedStoreKey(baseKey)}:`;
-    const existing: string[] = [];
-    await store.iterate<StoredLog, void>((_value, key) => {
-        if (key.startsWith(prefix)) existing.push(key);
-    });
-    await Promise.all(existing.map((key) => store.removeItem(key)));
+export async function replaceStoredLogs(store: LogStore, logs: StoredLog[]) {
+    await store.clear();
     await runWithConcurrency(logs, FILE_CONCURRENCY, async (log) => {
         const id = getStringField(log, "id");
-        if (id) await store.setItem(`${scopedStoreKey(baseKey)}:${id}`, log);
+        if (id) await store.setItem(id, log);
     });
 }
 
-function mergeById<T extends { id?: string }>(local: T[], remote: T[], timeKey: string) {
+export function mergeById<T extends { id?: string }>(local: T[], remote: T[], timeKey: string) {
     const items = new Map<string, T>();
     remote.forEach((item) => {
         const id = item.id || "";
@@ -334,7 +323,7 @@ function domainPath(domain: DomainKey, path: string) {
 
 function domainLabel(domain: DomainKey) {
     if (domain === "canvas") return "画布";
-    if (domain === "assets") return "我的素材";
+    if (domain === "assets") return "我的资产";
     if (domain === "image-workbench") return "生图工作台";
     return "视频创作台";
 }
@@ -371,7 +360,7 @@ function fileExtension(mimeType: string, storageKey: string) {
     return storageKey.startsWith("image:") ? "png" : "bin";
 }
 
-function waitForHydration<T extends { hydrated: boolean }>(store: { getState: () => T; subscribe: (listener: (state: T) => void) => () => void }) {
+export function waitForHydration<T extends { hydrated: boolean }>(store: { getState: () => T; subscribe: (listener: (state: T) => void) => () => void }) {
     if (store.getState().hydrated) return Promise.resolve();
     return new Promise<void>((resolve) => {
         const unsubscribe = store.subscribe((state) => {

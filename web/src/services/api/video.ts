@@ -1,4 +1,5 @@
 import axios from "axios";
+import { nanoid } from "nanoid";
 
 import { GROK_IMAGE_VIDEO_MODEL, isGrokImagineVideoModel, isGrokPreviewVideoModel, normalizeGrokPreviewModel, normalizeGrokPreviewSeconds, normalizeGrokPreviewVideoSize, normalizeGrokVideoAspectRatio, normalizeGrokVideoSize } from "@/lib/grok-video";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -6,105 +7,176 @@ import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/fil
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
 import { readVideoErrorMessage, readVideoStatus, readVideoTaskId, readVideoUrl, type VideoResponse } from "@/services/api/video-response";
-import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
+import { isGatewayModel } from "@/services/gateway-channel";
+import { buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { runModelPlugin } from "./model-plugin";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
+
 type ApiVideoResponse = VideoResponse | { code?: number; data?: VideoResponse | null; msg?: string };
 type SeedanceTask = {
     id: string;
-    status?: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "expired";
+    status?: "queued" | "running" | "succeeded" | "completed" | "failed" | "cancelled" | "expired";
     error?: { code?: string; message?: string } | null;
-    content?: { video_url?: string; last_frame_url?: string } | null;
+    content?: { video_url?: string; url?: string; last_frame_url?: string } | null;
 };
 type ApiEnvelope<T> = T | { code?: number; data?: T | null; msg?: string };
 type ReferenceMediaUploadResponse = { id: string; url: string; mimeType: string; bytes: number };
+type RequestOptions = { signal?: AbortSignal };
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
-export type VideoGenerationTask = { id: string; provider: "openai" | "seedance"; model: string; path?: string };
+/** `model` 保留渠道前缀用于重新解析渠道；`requestModel` 是实际发给服务商的模型名。 */
+export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "plugin"; model: string; requestModel?: string; path?: string };
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
-export const VIDEO_TASK_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Results for scripted (plugin) video models, which run their own create+poll in one shot at task creation. */
+const pluginVideoResults = new Map<string, VideoGenerationResult>();
 
 function aiApiUrl(config: AiConfig, path: string) {
-    return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
-}
-
-function videoCreatePath(config: AiConfig, model: string) {
-    return isGrokImagineVideoModel(model) && (config.channelMode === "remote" || isXAIBaseUrl(config.baseUrl)) ? "/videos/generations" : "/videos";
+    return buildApiUrl(config.baseUrl, path);
 }
 
 function aiHeaders(config: AiConfig, contentType?: string) {
-    const token = useUserStore.getState().token;
-    return config.channelMode === "remote"
-        ? {
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-              ...(contentType ? { "Content-Type": contentType } : {}),
-          }
-        : {
-              Authorization: `Bearer ${config.apiKey}`,
-              ...(contentType ? { "Content-Type": contentType } : {}),
-          };
+    return {
+        Authorization: `Bearer ${config.apiKey}`,
+        ...(contentType ? { "Content-Type": contentType } : {}),
+    };
 }
 
-function refreshRemoteUser(config: AiConfig) {
-    if (config.channelMode === "remote") void useUserStore.getState().hydrateUser();
+/** 走内置网关时后端会扣算力点，生成完成后刷新余额。 */
+function refreshGatewayUser(remote: boolean) {
+    if (remote) void useUserStore.getState().hydrateUser();
 }
 
-export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = []): Promise<VideoGenerationResult> {
-    const task = await createVideoGenerationTask(config, prompt, references, videoReferences, audioReferences);
+/** 网关和 xAI 官方都走 /videos/generations；其它兼容网关仍是 /videos。 */
+export function videoCreatePath(config: AiConfig, model: string, remote: boolean) {
+    return isGrokImagineVideoModel(model) && (remote || isXAIBaseUrl(config.baseUrl)) ? "/videos/generations" : "/videos";
+}
+
+export function openAIVideoCreatePath(model: string) {
+    // new-api style gateways (SubRouter) serve seedance on the unified JSON endpoint
+    return isOpenAICompatibleSeedanceVideoModel(model) ? "/video/generations" : "/videos";
+}
+
+export function isOpenAICompatibleSeedanceVideoModel(model: string) {
+    const value = model.toLowerCase();
+    return value.includes("seedance") && !value.includes("doubao-seedance");
+}
+
+export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationResult> {
+    const task = await createVideoGenerationTask(config, prompt, references, videoReferences, audioReferences, options);
     const delayMs = task.provider === "seedance" ? 5000 : 2500;
-    const deadline = Date.now() + VIDEO_TASK_TIMEOUT_MS;
-    for (;;) {
-        const state = await pollVideoGenerationTask(config, task);
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        const state = await pollVideoGenerationTask(config, task, options);
         if (state.status === "completed") return state.result;
         if (state.status === "failed") throw new Error(state.error);
-        if (Date.now() >= deadline) throw new Error(`${task.provider === "seedance" ? "Seedance " : ""}视频生成超时，请稍后重试`);
-        await delay(delayMs);
+        if (attempt === 119) throw new Error(`${task.provider === "seedance" ? "Seedance " : ""}视频生成超时，请稍后重试`);
+        await delay(delayMs, options?.signal);
     }
+    throw new Error("视频生成超时，请稍后重试");
 }
 
-export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = []): Promise<VideoGenerationTask> {
-    const model = (config.model || config.videoModel).trim();
+export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationTask> {
+    const selectedModel = (config.model || config.videoModel).trim();
+    const requestConfig = resolveModelRequestConfig(config, selectedModel);
+    const script = resolveModelScript(config, selectedModel);
+    if (script) return createPluginVideoTask(requestConfig, selectedModel, script, prompt, references, options);
+    assertVideoConfig(requestConfig, requestConfig.model);
+    const remote = isGatewayModel(config, selectedModel);
+    const model = requestConfig.model;
     const isGrokVideo = isGrokImagineVideoModel(model);
     const isOpenAIVideoJson = isGrokVideo || isOpenAICompatibleSeedanceVideoModel(model);
-    assertVideoConfig(config, model);
-    if (isSeedanceVideoConfig({ ...config, model })) {
-        return createSeedanceTask(config, model, prompt, references, videoReferences, audioReferences);
+    if (isSeedanceVideoConfig(requestConfig)) {
+        return createSeedanceTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
     }
     if ((videoReferences.length || audioReferences.length) && !isOpenAIVideoJson) {
         throw new Error("当前视频接口只支持参考图；参考视频或参考音频请切换到 Grok Imagine Video、Seedance 2.0 / 火山 Agent Plan 模型，或移除参考素材");
     }
-    if (isGrokPreviewVideoModel(model)) return createGrokPreviewVideoTask(config, model, prompt, references, videoReferences, audioReferences);
-    if (isGrokVideo) return createGrokVideoTask(config, model, prompt, references, videoReferences, audioReferences);
-    if (isOpenAIVideoJson) return createUnifiedVideoTask(config, model, prompt, references, videoReferences, audioReferences);
-    return createOpenAIVideoTask(config, model, prompt, references, [], []);
+    if (isGrokPreviewVideoModel(model)) return createGrokPreviewVideoTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
+    if (isGrokVideo) return createGrokVideoTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
+    if (isOpenAIVideoJson) return createUnifiedVideoTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
+    return createOpenAIVideoTask(requestConfig, selectedModel, prompt, references, videoReferences, audioReferences, options);
 }
 
-export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask): Promise<VideoGenerationTaskState> {
-    assertVideoConfig(config, task.model);
-    return task.provider === "seedance" ? pollSeedanceTask(config, task) : pollOpenAIVideoTask(config, task);
+export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    if (task.provider === "plugin") {
+        const result = pluginVideoResults.get(task.id);
+        return result ? { status: "completed", result } : { status: "failed", error: "插件视频任务已失效，请重新生成" };
+    }
+    const requestConfig = resolveModelRequestConfig(config, task.model);
+    assertVideoConfig(requestConfig, requestConfig.model);
+    const remote = isGatewayModel(config, task.model);
+    return task.provider === "seedance" ? pollSeedanceTask(requestConfig, task, remote, options) : pollOpenAIVideoTask(requestConfig, task, remote, options);
+}
+
+async function createPluginVideoTask(config: AiConfig, model: string, script: string, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<VideoGenerationTask> {
+    if (!config.baseUrl.trim()) throw new Error("请先配置 Base URL");
+    if (!config.apiKey.trim()) throw new Error("请先配置 API Key");
+    const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
+    const result = videoPluginResult(
+        await runModelPlugin({
+            capability: "video",
+            script,
+            config,
+            prompt,
+            images: refs,
+            params: {
+                seconds: normalizeVideoSeconds(config.videoSeconds),
+                size: normalizeVideoSize(config.size),
+                resolution: normalizeVideoResolution(config.vquality),
+                ratio: config.size,
+                generateAudio: boolConfig(config.videoGenerateAudio, true),
+                watermark: boolConfig(config.videoWatermark, false),
+            },
+            signal: options?.signal,
+        }),
+    );
+    const id = nanoid();
+    pluginVideoResults.set(id, result);
+    return { id, provider: "plugin", model };
+}
+
+function videoPluginResult(result: unknown): VideoGenerationResult {
+    if (result instanceof Blob) return { blob: result };
+    if (typeof result === "string") return { url: result, mimeType: "video/mp4" };
+    if (result && typeof result === "object") {
+        const record = result as Record<string, unknown>;
+        if (record.blob instanceof Blob) return { blob: record.blob };
+        const url = [record.url, record.video_url, record.result_url].find((value) => typeof value === "string" && value) as string | undefined;
+        if (url) return { url, mimeType: "video/mp4" };
+    }
+    throw new Error("模型调用脚本没有返回视频");
 }
 
 export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {
     if (result.blob) return uploadMediaFile(result.blob, "video");
-    if (result.url) return { url: result.url, storageKey: "", bytes: 0, mimeType: result.mimeType || "video/mp4" };
+    if (result.url) {
+        try {
+            return await uploadMediaFile(result.url, "video");
+        } catch {
+            return { url: result.url, storageKey: "", bytes: 0, mimeType: result.mimeType || "video/mp4" };
+        }
+    }
     throw new Error("视频接口没有返回可播放的视频");
 }
 
-async function createGrokPreviewVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
+async function createGrokPreviewVideoTask(config: AiConfig, selectedModel: string, remote: boolean, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
     assertGrokPreviewReferences(references, videoReferences, audioReferences);
-    const path = videoCreatePath(config, model);
+    const model = config.model;
+    const path = videoCreatePath(config, model, remote);
     const official = path === "/videos/generations";
-    const requestModel = official && config.channelMode !== "remote" ? normalizeGrokPreviewModel(model) : model;
-    const firstFrame = official ? await resolveGrokImageUrl(config, references[0]) : await imageToDataUrl(references[0]);
+    const requestModel = official && !remote ? normalizeGrokPreviewModel(model) : model;
+    const firstFrame = official ? await resolveGrokImageUrl(config, remote, references[0]) : await imageToDataUrl(references[0]);
     if (!firstFrame || (!firstFrame.startsWith("data:image/") && !isPublicMediaUrl(firstFrame))) throw new Error("首帧图片读取失败，请重新上传图片");
     const duration = Number(normalizeGrokPreviewSeconds(config.videoSeconds, model));
     const aspectRatio = normalizeGrokVideoAspectRatio(config.size || normalizeGrokPreviewVideoSize(config.size));
     const payload = official
         ? {
               model: requestModel,
-              // remote 模式由后端按渠道决定是否保留 prompt；本地直连 xAI 官方接口不发 prompt
-              ...(config.channelMode === "remote" && prompt.trim() ? { prompt: prompt.trim() } : {}),
+              // 网关模式由后端按渠道决定是否保留 prompt；本地直连 xAI 官方接口不发 prompt
+              ...(remote && prompt.trim() ? { prompt: prompt.trim() } : {}),
               image: { url: firstFrame },
               duration,
               aspect_ratio: aspectRatio,
@@ -119,18 +191,19 @@ async function createGrokPreviewVideoTask(config: AiConfig, model: string, promp
           };
 
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), payload, { headers: aiHeaders(config, "application/json") })).data);
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), payload, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
         const id = readVideoTaskId(created);
         if (!id) throw new Error("视频接口没有返回任务 ID");
-        return { id, provider: "openai", model: requestModel };
+        return { id, provider: "openai", model: selectedModel, requestModel };
     } catch (error) {
         throw new Error(readAxiosError(error, "Grok 1.5 preview 视频任务创建失败"));
     }
 }
 
-async function createGrokVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
-    const path = videoCreatePath(config, model);
-    if (path !== "/videos/generations") return createLegacyGrokVideoTask(config, model, prompt, references, videoReferences, audioReferences);
+async function createGrokVideoTask(config: AiConfig, selectedModel: string, remote: boolean, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
+    const model = config.model;
+    const path = videoCreatePath(config, model, remote);
+    if (path !== "/videos/generations") return createLegacyGrokVideoTask(config, selectedModel, prompt, references, videoReferences, audioReferences, options);
     assertGrokVideoReferences(videoReferences, audioReferences);
     const seconds = Number(normalizeVideoSeconds(config.videoSeconds));
     const payload = {
@@ -139,21 +212,22 @@ async function createGrokVideoTask(config: AiConfig, model: string, prompt: stri
         duration: seconds,
         aspect_ratio: normalizeGrokVideoAspectRatio(config.size || normalizeGrokVideoSize(config.size)),
         resolution: normalizeGrokVideoResolution(config.vquality),
-        ...(references.length ? { reference_images: await buildGrokImageReferences(config, references) } : {}),
+        ...(references.length ? { reference_images: await buildGrokImageReferences(config, remote, references) } : {}),
     };
 
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), payload, { headers: aiHeaders(config, "application/json") })).data);
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), payload, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
         const id = readVideoTaskId(created);
         if (!id) throw new Error("视频接口没有返回任务 ID");
-        return { id, provider: "openai", model };
+        return { id, provider: "openai", model: selectedModel, requestModel: model };
     } catch (error) {
         throw new Error(readAxiosError(error, "Grok 视频任务创建失败"));
     }
 }
 
-async function createLegacyGrokVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
+async function createLegacyGrokVideoTask(config: AiConfig, selectedModel: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
     assertGrokLegacyReferences(references, videoReferences, audioReferences);
+    const model = config.model;
     const seconds = Number(normalizeVideoSeconds(config.videoSeconds));
     const size = normalizeGrokVideoSize(config.size);
     const aspectRatio = normalizeGrokVideoAspectRatio(config.size || size);
@@ -179,22 +253,24 @@ async function createLegacyGrokVideoTask(config: AiConfig, model: string, prompt
     };
 
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), payload, { headers: aiHeaders(config, "application/json") })).data);
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), payload, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
         const id = readVideoTaskId(created);
         if (!id) throw new Error("视频接口没有返回任务 ID");
-        return { id, provider: "openai", model };
+        return { id, provider: "openai", model: selectedModel, requestModel: model };
     } catch (error) {
         throw new Error(readAxiosError(error, "Grok 视频任务创建失败"));
     }
 }
 
-async function createUnifiedVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
+/** SubRouter / new-api 风格网关把 seedance 放在统一的 JSON 视频端点上。 */
+async function createUnifiedVideoTask(config: AiConfig, selectedModel: string, remote: boolean, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
     if (videoReferences.length || audioReferences.length) {
         throw new Error("当前渠道的 Seedance 模型暂不支持参考视频或参考音频，请移除后重试，或切换到火山方舟渠道");
     }
+    const model = config.model;
     const path = "/video/generations";
     const duration = normalizeSeedanceDuration(config.videoSeconds);
-    const images = await Promise.all(references.slice(0, SEEDANCE_REFERENCE_LIMITS.images).map((image) => resolveGrokImageUrl(config, image)));
+    const images = await Promise.all(references.slice(0, SEEDANCE_REFERENCE_LIMITS.images).map((image) => resolveGrokImageUrl(config, remote, image)));
     const payload = {
         model,
         prompt,
@@ -209,16 +285,17 @@ async function createUnifiedVideoTask(config: AiConfig, model: string, prompt: s
         ...(images.length > 1 ? { images } : {}),
     };
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), payload, { headers: aiHeaders(config, "application/json") })).data);
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), payload, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
         const id = readVideoTaskId(created);
         if (!id) throw new Error("视频接口没有返回任务 ID");
-        return { id, provider: "openai", model, path };
+        return { id, provider: "openai", model: selectedModel, requestModel: model, path };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务创建失败"));
     }
 }
 
-async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
+async function createOpenAIVideoTask(config: AiConfig, selectedModel: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
+    const model = config.model;
     const path = openAIVideoCreatePath(model);
     const body = new FormData();
     body.append("model", model);
@@ -234,10 +311,10 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     const audioFiles = await Promise.all(audioReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.audios).map(referenceAudioToFile));
     audioFiles.forEach((file) => body.append("input_reference[]", file));
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), body, { headers: aiHeaders(config) })).data);
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), body, { headers: aiHeaders(config), signal: options?.signal })).data);
         const id = readVideoTaskId(created);
         if (!id) throw new Error("视频接口没有返回任务 ID");
-        return { id, provider: "openai", model, path };
+        return { id, provider: "openai", model: selectedModel, requestModel: model, path };
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务创建失败"));
     }
@@ -268,23 +345,24 @@ async function referenceMediaBlob(storageKey: string | undefined, url: string) {
     }
 }
 
-async function resolveGrokImageUrl(config: AiConfig, image: ReferenceImage) {
+async function resolveGrokImageUrl(config: AiConfig, remote: boolean, image: ReferenceImage) {
     const directUrl = image.url || image.dataUrl;
     if (isPublicMediaUrl(directUrl)) return directUrl;
     const dataUrl = await imageToDataUrl(image);
     if (!dataUrl?.startsWith("data:image/")) throw new Error("参考图读取失败，请换一张图片或重新上传");
-    if (config.channelMode === "remote") return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }));
+    if (remote) return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }));
     return dataUrl;
 }
 
-async function buildGrokImageReferences(config: AiConfig, references: ReferenceImage[]) {
-    return Promise.all(references.slice(0, 4).map((image) => resolveGrokImageUrl(config, image)));
+async function buildGrokImageReferences(config: AiConfig, remote: boolean, references: ReferenceImage[]) {
+    return Promise.all(references.slice(0, 4).map((image) => resolveGrokImageUrl(config, remote, image)));
 }
 
-async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask): Promise<VideoGenerationTaskState> {
-    const path = task.path || openAIVideoCreatePath(task.model);
+async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, remote: boolean, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    const path = task.path || openAIVideoCreatePath(task.requestModel || config.model);
+    const params = remote && task.requestModel ? { model: task.requestModel } : undefined;
     try {
-        const video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `${path}/${task.id}`), { headers: aiHeaders(config), params: config.channelMode === "remote" ? { model: task.model } : undefined })).data);
+        const video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `${path}/${task.id}`), { headers: aiHeaders(config), params, signal: options?.signal })).data);
         const status = readVideoStatus(video);
         const errorMessage = readVideoErrorMessage(video);
         if (isFailedVideoStatus(status) || (errorMessage && !isCompletedVideoStatus(status))) {
@@ -292,13 +370,13 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask):
         }
         const videoUrl = readVideoUrl(video);
         if (videoUrl && (!status || isCompletedVideoStatus(status))) {
-            refreshRemoteUser(config);
-            return { status: "completed", result: await videoResultFromUrl(videoUrl, config, task) };
+            refreshGatewayUser(remote);
+            return { status: "completed", result: await videoResultFromUrl(videoUrl, config, remote, task, options) };
         }
         if (isCompletedVideoStatus(status)) {
-            const content = await axios.get<Blob>(aiApiUrl(config, `${path}/${task.id}/content`), { headers: aiHeaders(config), params: config.channelMode === "remote" ? { model: task.model } : undefined, responseType: "blob" });
+            const content = await axios.get<Blob>(aiApiUrl(config, `${path}/${task.id}/content`), { headers: aiHeaders(config), params, responseType: "blob", signal: options?.signal });
             await assertVideoBlob(content.data);
-            refreshRemoteUser(config);
+            refreshGatewayUser(remote);
             return { status: "completed", result: { blob: content.data } };
         }
         return { status: "pending" };
@@ -307,13 +385,14 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask):
     }
 }
 
-async function createSeedanceTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]): Promise<VideoGenerationTask> {
+async function createSeedanceTask(config: AiConfig, selectedModel: string, remote: boolean, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
     if (audioReferences.length && !references.length && !videoReferences.length) {
         throw new Error("Seedance 参考音频不能单独使用，请同时添加参考图或参考视频");
     }
     assertSeedanceVideoReferences(videoReferences);
     assertSeedanceAudioReferences(audioReferences);
-    const content = await buildSeedanceContent(config, prompt, references, videoReferences, audioReferences);
+    const model = config.model;
+    const content = await buildSeedanceContent(config, remote, prompt, references, videoReferences, audioReferences);
     if (!content.length) throw new Error("请输入视频提示词，或连接参考图片/视频/音频");
     const payload = {
         model,
@@ -326,25 +405,26 @@ async function createSeedanceTask(config: AiConfig, model: string, prompt: strin
     };
 
     try {
-        const created = unwrapSeedanceTask((await axios.post<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config), payload, { headers: aiHeaders(config, "application/json") })).data);
+        const created = unwrapSeedanceTask((await axios.post<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config, remote), payload, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
         const id = created.id || readVideoTaskId(created as unknown as VideoResponse);
         if (!id) throw new Error("Seedance 接口没有返回任务 ID");
-        return { id, provider: "seedance", model };
+        return { id, provider: "seedance", model: selectedModel, requestModel: model };
     } catch (error) {
         throw new Error(readAxiosError(error, "Seedance 任务创建失败"));
     }
 }
 
-async function pollSeedanceTask(config: AiConfig, task: VideoGenerationTask): Promise<VideoGenerationTaskState> {
+async function pollSeedanceTask(config: AiConfig, task: VideoGenerationTask, remote: boolean, options?: RequestOptions): Promise<VideoGenerationTaskState> {
+    const params = remote && task.requestModel ? { model: task.requestModel } : undefined;
     try {
-        const state = unwrapSeedanceTask((await axios.get<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config, task.id), { headers: aiHeaders(config), params: config.channelMode === "remote" ? { model: task.model } : undefined })).data);
+        const state = unwrapSeedanceTask((await axios.get<ApiEnvelope<SeedanceTask>>(seedanceApiUrl(config, remote, task.id), { headers: aiHeaders(config), params, signal: options?.signal })).data);
         const raw = state as unknown as VideoResponse;
         const status = String(state.status || readVideoStatus(raw)).toLowerCase();
         if (isCompletedVideoStatus(status)) {
-            const url = state.content?.video_url || readVideoUrl(raw);
+            const url = state.content?.video_url || state.content?.url || readVideoUrl(raw);
             if (!url) return { status: "failed", error: "Seedance 任务成功但没有返回视频 URL" };
-            refreshRemoteUser(config);
-            return { status: "completed", result: await videoResultFromUrl(url, config, task) };
+            refreshGatewayUser(remote);
+            return { status: "completed", result: await videoResultFromUrl(url, config, remote, task, options) };
         }
         if (isFailedVideoStatus(status)) return { status: "failed", error: state.error?.message || readVideoErrorMessage(raw) || `Seedance 视频生成${status === "expired" ? "超时" : "失败"}` };
         return { status: "pending" };
@@ -375,58 +455,58 @@ function assertSeedanceAudioReferences(audioReferences: ReferenceAudio[]) {
     if (total > 15000) throw new Error("Seedance 参考音频总时长不能超过 15 秒");
 }
 
-function seedanceApiUrl(config: AiConfig, taskId?: string) {
-    if (config.channelMode === "remote") return taskId ? `/api/v1/videos/${encodeURIComponent(taskId)}` : "/api/v1/videos";
+/** 网关暴露的是 OpenAI 风格的 /videos；火山方舟原生接口是 /contents/generations/tasks。 */
+function seedanceApiUrl(config: AiConfig, remote: boolean, taskId?: string) {
+    if (remote) return buildApiUrl(config.baseUrl, `/videos${taskId ? `/${encodeURIComponent(taskId)}` : ""}`);
     return buildApiUrl(config.baseUrl, `/contents/generations/tasks${taskId ? `/${encodeURIComponent(taskId)}` : ""}`);
 }
 
-async function buildSeedanceContent(config: AiConfig, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
+async function buildSeedanceContent(config: AiConfig, remote: boolean, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
     const content: Array<Record<string, unknown>> = [];
     const text = buildSeedancePromptText(prompt, references, videoReferences, audioReferences);
     if (text) content.push({ type: "text", text });
     for (const image of references.slice(0, SEEDANCE_REFERENCE_LIMITS.images)) {
-        content.push({ type: "image_url", image_url: { url: await resolveSeedanceImageUrl(config, image) }, role: "reference_image" });
+        content.push({ type: "image_url", image_url: { url: await resolveSeedanceImageUrl(config, remote, image) }, role: "reference_image" });
     }
     for (const video of videoReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.videos)) {
-        content.push({ type: "video_url", video_url: { url: await resolveSeedanceVideoUrl(video) }, role: "reference_video" });
+        content.push({ type: "video_url", video_url: { url: await resolveSeedanceVideoUrl(remote, video) }, role: "reference_video" });
     }
     for (const audio of audioReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.audios)) {
-        content.push({ type: "audio_url", audio_url: { url: await resolveSeedanceAudioUrl(audio) }, role: "reference_audio" });
+        content.push({ type: "audio_url", audio_url: { url: await resolveSeedanceAudioUrl(remote, audio) }, role: "reference_audio" });
     }
     return content;
 }
 
-async function resolveSeedanceImageUrl(config: AiConfig, image: ReferenceImage) {
+async function resolveSeedanceImageUrl(config: AiConfig, remote: boolean, image: ReferenceImage) {
     const directUrl = image.url || image.dataUrl;
     if (isPublicMediaUrl(directUrl) || directUrl.startsWith("asset://")) return directUrl;
     const dataUrl = await imageToDataUrl(image);
     if (!dataUrl) throw new Error("参考图读取失败，请换一张图片或重新上传");
-    if (config.channelMode === "remote") {
-        return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }));
-    }
+    if (remote) return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }));
     return dataUrl;
 }
 
-async function resolveSeedanceVideoUrl(video: ReferenceVideo) {
+async function resolveSeedanceVideoUrl(remote: boolean, video: ReferenceVideo) {
     if (isPublicMediaUrl(video.url) || video.url.startsWith("asset://")) return video.url;
     let blob: Blob | null = null;
     if (video.storageKey) blob = await getMediaBlob(video.storageKey);
     if (!blob && video.url?.startsWith("blob:")) blob = await (await fetch(video.url)).blob();
     if (!blob) throw new Error("参考视频必须是公网 URL、素材 ID，或本地已保存的视频");
     const file = new File([blob], video.name || "reference-video.mp4", { type: video.type || blob.type || "video/mp4" });
-    return uploadReferenceMedia(file);
+    return remote ? uploadReferenceMedia(file) : blobToDataUrl(blob);
 }
 
-async function resolveSeedanceAudioUrl(audio: ReferenceAudio) {
+async function resolveSeedanceAudioUrl(remote: boolean, audio: ReferenceAudio) {
     if (isPublicMediaUrl(audio.url) || audio.url.startsWith("asset://")) return audio.url;
     let blob: Blob | null = null;
     if (audio.storageKey) blob = await getMediaBlob(audio.storageKey);
     if (!blob && audio.url?.startsWith("blob:")) blob = await (await fetch(audio.url)).blob();
     if (!blob) throw new Error("参考音频必须是公网 URL、素材 ID，或本地已保存的音频");
     const file = new File([blob], audio.name || "reference-audio.mp3", { type: audio.type || blob.type || "audio/mpeg" });
-    return uploadReferenceMedia(file);
+    return remote ? uploadReferenceMedia(file) : blobToDataUrl(blob);
 }
 
+/** 本地素材没有公网地址时，先传给后端换一个可被服务商回source的 URL。 */
 async function uploadReferenceMedia(file: File) {
     const token = useUserStore.getState().token;
     if (!token) throw new Error("使用本地参考素材需要先登录，并在服务端配置 PUBLIC_BASE_URL");
@@ -438,31 +518,37 @@ async function uploadReferenceMedia(file: File) {
     return payload.url;
 }
 
-async function videoResultFromUrl(url: string, config?: AiConfig, task?: VideoGenerationTask): Promise<VideoGenerationResult> {
-    const remoteContentUrl = remoteVideoContentProxyUrl(config, url);
+async function videoResultFromUrl(url: string, config: AiConfig, remote: boolean, task?: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationResult> {
+    const remoteContentUrl = remote ? remoteVideoContentProxyUrl(config, url) : "";
     try {
         if (remoteContentUrl) {
-            const response = await axios.get<Blob>(remoteContentUrl, { headers: aiHeaders(config!), params: task?.model ? { model: task.model } : undefined, responseType: "blob" });
+            const response = await axios.get<Blob>(remoteContentUrl, { headers: aiHeaders(config), params: task?.requestModel ? { model: task.requestModel } : undefined, responseType: "blob", signal: options?.signal });
             await assertVideoBlob(response.data);
             return { blob: response.data };
         }
-        if (config?.channelMode === "local" && shouldSendVideoContentAuth(config, url)) {
-            const response = await axios.post<Blob>("/api/video-content", { url, apiKey: config.apiKey }, { responseType: "blob" });
+        if (!remote && shouldSendVideoContentAuth(config, url)) {
+            // 浏览器跨域取不了带鉴权的视频内容，交给后端代下载。
+            const response = await axios.post<Blob>("/api/video-content", { url, apiKey: config.apiKey }, { responseType: "blob", headers: gatewayAuthHeaders(), signal: options?.signal });
             await assertVideoBlob(response.data);
             return { blob: response.data };
         }
-        const headers = config && shouldSendVideoContentAuth(config, url) ? aiHeaders(config) : undefined;
-        const response = await axios.get<Blob>(url, { responseType: "blob", ...(headers ? { headers } : {}) });
+        const headers = shouldSendVideoContentAuth(config, url) ? aiHeaders(config) : undefined;
+        const response = await axios.get<Blob>(url, { responseType: "blob", ...(headers ? { headers } : {}), signal: options?.signal });
         await assertVideoBlob(response.data);
         return { blob: response.data };
     } catch (error) {
+        if (axios.isCancel(error) || options?.signal?.aborted) throw error;
         if (remoteContentUrl) throw new Error(readAxiosError(error, "视频已生成，但下载视频内容失败"));
         return { url, mimeType: "video/mp4" };
     }
 }
 
-function remoteVideoContentProxyUrl(config: AiConfig | undefined, url: string) {
-    if (config?.channelMode !== "remote") return "";
+function gatewayAuthHeaders() {
+    const token = useUserStore.getState().token;
+    return token ? { Authorization: `Bearer ${token}` } : undefined;
+}
+
+function remoteVideoContentProxyUrl(config: AiConfig, url: string) {
     const taskId = videoContentTaskId(url);
     return taskId ? aiApiUrl(config, `/videos/${encodeURIComponent(taskId)}/content`) : "";
 }
@@ -495,8 +581,9 @@ function shouldSendVideoContentAuth(config: AiConfig, url: string) {
 
 function assertVideoConfig(config: AiConfig, model: string) {
     if (!model) throw new Error("请先配置视频模型");
-    if (config.channelMode === "local" && !config.baseUrl.trim()) throw new Error("请先配置 Base URL");
-    if (config.channelMode === "local" && !config.apiKey.trim()) throw new Error("请先配置 API Key");
+    if (!config.baseUrl.trim()) throw new Error("请先配置 Base URL");
+    if (!config.apiKey.trim()) throw new Error("请先配置 API Key");
+    if (config.apiFormat === "gemini") throw new Error("Gemini 调用格式暂不支持视频生成，请使用 OpenAI 格式渠道");
 }
 
 function normalizeVideoSeconds(value: string) {
@@ -556,16 +643,6 @@ function assertGrokLegacyReferences(references: ReferenceImage[], videoReference
     throw new Error("当前 Grok 兼容网关按非流文生视频接口发送，不支持参考素材；xAI 官方参考图视频请把 Base URL 配置为 https://api.x.ai");
 }
 
-function isOpenAICompatibleSeedanceVideoModel(model: string) {
-    const value = model.toLowerCase();
-    return value.includes("seedance") && !value.includes("doubao-seedance");
-}
-
-function openAIVideoCreatePath(model: string) {
-    // new-api style gateways (SubRouter) serve seedance on the unified JSON endpoint
-    return isOpenAICompatibleSeedanceVideoModel(model) ? "/video/generations" : "/videos";
-}
-
 function unwrapVideoResponse(payload: ApiVideoResponse) {
     return unwrapEnvelope(payload, "接口没有返回视频任务");
 }
@@ -593,10 +670,12 @@ function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
 }
 
 function readAxiosError(error: unknown, fallback: string) {
+    if (axios.isCancel(error)) return "请求已取消";
     if (axios.isAxiosError<unknown>(error)) {
         const responseData = error.response?.data;
         return normalizeVideoErrorMessage(errorResponseMessage(responseData) || statusMessage(error.response?.status, fallback));
     }
+    if (error instanceof DOMException && error.name === "AbortError") return "请求已取消";
     return normalizeVideoErrorMessage(error instanceof Error ? error.message : fallback);
 }
 
@@ -670,6 +749,29 @@ function isXAIBaseUrl(baseUrl: string) {
     }
 }
 
-function delay(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal) {
+    return new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new DOMException("Aborted", "AbortError"));
+            return;
+        }
+        const timer = setTimeout(resolve, ms);
+        signal?.addEventListener(
+            "abort",
+            () => {
+                clearTimeout(timer);
+                reject(new DOMException("Aborted", "AbortError"));
+            },
+            { once: true },
+        );
+    });
+}
+
+function blobToDataUrl(blob: Blob) {
+    return new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("读取本地资产失败"));
+        reader.readAsDataURL(blob);
+    });
 }

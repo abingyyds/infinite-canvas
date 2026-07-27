@@ -1,4 +1,4 @@
-import { FileText, ImagePlus, Images, Maximize2, Video } from "lucide-react";
+import { FileText, ImagePlus, Images, Maximize2, Settings2, Video } from "lucide-react";
 
 export const navigationTools = [
     {
@@ -23,8 +23,13 @@ export const navigationTools = [
     },
     {
         slug: "assets",
-        label: "我的素材",
+        label: "我的资产",
         icon: Images,
+    },
+    {
+        slug: "config",
+        label: "配置",
+        icon: Settings2,
     },
 ] as const;
 

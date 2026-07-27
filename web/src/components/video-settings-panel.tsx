@@ -1,5 +1,3 @@
-"use client";
-
 import { type ReactNode } from "react";
 import { Switch } from "antd";
 
@@ -7,9 +5,9 @@ import { ImageSettingsTheme } from "@/components/image-settings-panel";
 import { grokPreviewDurationOptions, isGrokImagineVideoModel, isGrokPreviewVideoModel, normalizeGrokPreviewSeconds } from "@/lib/grok-video";
 import { boolConfig, isSeedanceFastModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationOptions, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
-import { modelMatchesCapability, type AiConfig } from "@/stores/use-config-store";
+import { modelMatchesCapability, modelOptionName, type AiConfig } from "@/stores/use-config-store";
 
-const generalResolutionOptions = [
+const resolutionOptions = [
     { value: "360", label: "360p" },
     { value: "480", label: "480p" },
     { value: "540", label: "540p" },
@@ -19,6 +17,7 @@ const generalResolutionOptions = [
     { value: "2160", label: "2160p" },
 ];
 
+// Grok Imagine Video 官方只接受 480p / 720p。
 const grokResolutionOptions = [
     { value: "480", label: "480p" },
     { value: "720", label: "720p" },
@@ -35,18 +34,24 @@ const sizeOptions = [
 
 const secondOptions = [6, 10, 12, 16, 20];
 
+export const videoResolutionOptions = resolutionOptions.map((item) => ({ value: item.value, label: item.label }));
+export const videoSizeOptions = sizeOptions.map((item) => ({ value: item.value, label: item.label }));
+export const videoSecondOptions = secondOptions.map((value) => String(value));
+
 type VideoSettingsPanelProps = {
     config: AiConfig;
+    /** 当前生成用的视频模型；工作台里它和 config.model 不同，必须显式传入。 */
+    model?: string;
     onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     className?: string;
 };
 
-export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5" }: VideoSettingsPanelProps) {
-    const model = resolveVideoSettingsModel(config);
+export function VideoSettingsPanel({ config, model: selectedModel, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5" }: VideoSettingsPanelProps) {
+    const model = resolveVideoSettingsModel(config, selectedModel);
     if (isSeedanceVideoConfig({ ...config, model })) {
-        return <SeedanceVideoSettingsPanel config={config} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} />;
+        return <SeedanceVideoSettingsPanel config={config} model={selectedModel} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} />;
     }
 
     const isGrokPreview = isGrokPreviewVideoModel(model);
@@ -122,8 +127,8 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
     );
 }
 
-function SeedanceVideoSettingsPanel({ config, onConfigChange, theme, showTitle, className }: VideoSettingsPanelProps) {
-    const model = resolveVideoSettingsModel(config);
+function SeedanceVideoSettingsPanel({ config, model: selectedModel, onConfigChange, theme, showTitle, className }: VideoSettingsPanelProps) {
+    const model = resolveVideoSettingsModel(config, selectedModel);
     const resolution = normalizeSeedanceResolution(config.vquality, model);
     const ratio = normalizeSeedanceRatio(config.size);
     const duration = normalizeSeedanceDuration(config.videoSeconds);
@@ -186,22 +191,8 @@ function SeedanceVideoSettingsPanel({ config, onConfigChange, theme, showTitle, 
     );
 }
 
-function resolveVideoSettingsModel(config: AiConfig) {
-    return modelMatchesCapability(config.model, "video") ? config.model : config.videoModel;
-}
-
 export function videoResolutionLabel(value: string) {
     return `${normalizeVideoResolutionValue(value)}p`;
-}
-
-function videoResolutionOptionsForModel(model: string) {
-    return isGrokImagineVideoModel(model) ? grokResolutionOptions : generalResolutionOptions;
-}
-
-function normalizeVideoResolutionForModel(value: string, model: string) {
-    const resolution = normalizeVideoResolutionValue(value);
-    if (!isGrokImagineVideoModel(model)) return resolution;
-    return resolution === "480" ? "480" : "720";
 }
 
 export function videoSizeLabel(value: string) {
@@ -223,8 +214,26 @@ export function normalizeVideoSizeValue(value: string) {
     return ["9:16", "2:3", "3:4"].includes(value) ? "720x1280" : "1280x720";
 }
 
+/** 画布节点里 config.model 就是当前生成模型；工作台里 config.model 可能是别的能力的模型，需要调用方传入。 */
+function resolveVideoSettingsModel(config: AiConfig, selectedModel?: string) {
+    if (selectedModel?.trim()) return modelOptionName(selectedModel);
+    return modelOptionName(modelMatchesCapability(config, config.model, "video") ? config.model : config.videoModel);
+}
+
+function videoResolutionOptionsForModel(model: string) {
+    return isGrokImagineVideoModel(model) ? grokResolutionOptions : resolutionOptions;
+}
+
+function normalizeVideoResolutionForModel(value: string, model: string) {
+    const resolution = normalizeVideoResolutionValue(value);
+    if (!isGrokImagineVideoModel(model)) return resolution;
+    return resolution === "480" ? "480" : "720";
+}
+
 export function normalizeVideoResolutionValue(value: string) {
-    const normalized = String(value || "").trim().toLowerCase();
+    const normalized = String(value || "")
+        .trim()
+        .toLowerCase();
     if (normalized === "480p" || normalized === "low") return "480";
     if (normalized === "720p" || normalized === "auto" || normalized === "high" || normalized === "medium" || normalized === "hd") return "720";
     if (normalized === "fhd") return "1080";

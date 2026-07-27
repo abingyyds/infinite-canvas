@@ -4,6 +4,7 @@
   "defaultOpen": true,
   "pages": [
     "license",
+    "cla",
     "business"
   ]
 }

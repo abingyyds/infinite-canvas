@@ -1,44 +1,18 @@
-"use client";
-
 import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
-import { usePathname } from "next/navigation";
 import { App } from "antd";
 
-import { startUserDataSync, stopUserDataSync } from "@/services/user-data-sync";
-import { useConfigStore } from "@/stores/use-config-store";
-import { useUserStore } from "@/stores/use-user-store";
+import { createModelChannel, useConfigStore } from "@/stores/use-config-store";
+import { usePromptSourceScheduler } from "@/hooks/use-prompt-source-scheduler";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
     const handledConfigParams = useRef(false);
-    const pathname = usePathname();
-    const hydrateUser = useUserStore((state) => state.hydrateUser);
-    const token = useUserStore((state) => state.token);
-    const user = useUserStore((state) => state.user);
-    const isReady = useUserStore((state) => state.isReady);
-    const loadPublicSettings = useConfigStore((state) => state.loadPublicSettings);
-    const publicSettings = useConfigStore((state) => state.publicSettings);
     const updateConfig = useConfigStore((state) => state.updateConfig);
+    const config = useConfigStore((state) => state.config);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
-    const isLoginPage = pathname === "/login" || pathname === "/admin/login";
 
-    useEffect(() => {
-        if (isLoginPage) {
-            void loadPublicSettings();
-            return;
-        }
-        void hydrateUser().then(() => loadPublicSettings());
-    }, [hydrateUser, isLoginPage, loadPublicSettings]);
-
-    useEffect(() => {
-        if (!isReady) return;
-        if (token && user && user.role !== "guest") {
-            void startUserDataSync(token);
-            return;
-        }
-        stopUserDataSync();
-    }, [isReady, token, user]);
+    usePromptSourceScheduler();
 
     useEffect(() => {
         if (handledConfigParams.current) return;
@@ -46,23 +20,32 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         const baseUrl = searchParams.get("baseUrl") || searchParams.get("baseurl");
         const apiKey = searchParams.get("apiKey") || searchParams.get("apikey");
         if (!baseUrl && !apiKey) return;
-        if (!publicSettings) return;
         handledConfigParams.current = true;
         searchParams.delete("baseUrl");
         searchParams.delete("baseurl");
         searchParams.delete("apiKey");
         searchParams.delete("apikey");
         window.history.replaceState(null, "", `${window.location.pathname}${searchParams.size ? `?${searchParams}` : ""}${window.location.hash}`);
-        if (!publicSettings.modelChannel.allowCustomChannel) {
-            openConfigDialog(false);
-            message.error("后台未允许用户自定义渠道，请联系管理员进行配置");
-            return;
-        }
-        updateConfig("channelMode", "local");
+        const firstChannel = config.channels[0];
+        updateConfig(
+            "channels",
+            firstChannel
+                ? config.channels.map((channel, index) =>
+                      index === 0
+                          ? {
+                                ...channel,
+                                ...(baseUrl ? { baseUrl } : {}),
+                                ...(apiKey ? { apiKey } : {}),
+                            }
+                          : channel,
+                  )
+                : [createModelChannel({ id: "default", name: "默认渠道", baseUrl: baseUrl || undefined, apiKey: apiKey || "" })],
+        );
         if (baseUrl) updateConfig("baseUrl", baseUrl);
         if (apiKey) updateConfig("apiKey", apiKey);
         openConfigDialog(false);
-    }, [message, openConfigDialog, publicSettings, updateConfig]);
+        message.success("已导入本地直连配置");
+    }, [config.channels, message, openConfigDialog, updateConfig]);
 
     return <>{children}</>;
 }

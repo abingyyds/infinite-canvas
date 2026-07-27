@@ -1,82 +1,70 @@
-"use client";
-
-import localforage from "localforage";
-
-import type { CanvasProject } from "@/app/(user)/canvas/stores/use-canvas-store";
-import { useCanvasStore } from "@/app/(user)/canvas/stores/use-canvas-store";
-import { localForageStorage } from "@/lib/localforage-storage";
-import { scopedStoreKey } from "@/lib/user-scope";
-import { readScopedStoredLogs, replaceScopedStoredLogs } from "@/services/app-sync";
+import { hydrateAsset, imageLogStore, mergeById, readStoredLogs, replaceStoredLogs, videoLogStore, waitForHydration, type StoredLog } from "@/services/app-sync";
 import { fetchUserDataSnapshot, saveUserDataSnapshot, type UserDataDomain } from "@/services/api/user-data";
 import type { Asset } from "@/stores/use-asset-store";
 import { useAssetStore } from "@/stores/use-asset-store";
+import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
+import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 
 type CanvasData = { projects: CanvasProject[] };
 type AssetData = { assets: Asset[] };
-type LogData = { logs: Array<Record<string, unknown> & { id?: string }> };
-type DomainData = CanvasData | AssetData | LogData;
+type LogData = { logs: StoredLog[] };
 
-const IMAGE_LOG_STORE_KEY = "infinite-canvas:image_generation_logs";
-const VIDEO_LOG_STORE_KEY = "infinite-canvas:video_generation_logs";
-const CANVAS_STORE_KEY = "infinite-canvas:canvas_store";
-const ASSET_STORE_KEY = "infinite-canvas:asset_store";
-const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
-const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
+const LAST_USER_KEY = "infinite-canvas:last-synced-user";
+const SAVE_DELAY_MS = 900;
 
 const saveTimers = new Map<UserDataDomain, ReturnType<typeof setTimeout>>();
-let hydratedToken = "";
+const savedPayloads = new Map<UserDataDomain, string>();
 let currentToken = "";
+let syncedUserId = "";
 let unsubscribers: Array<() => void> = [];
 let suppressSave = false;
 
-export async function startUserDataSync(token: string) {
-    if (typeof window === "undefined" || !token) return;
+export async function startUserDataSync(token: string, userId: string) {
+    if (!token || !userId) return;
     currentToken = token;
     setupSubscriptions();
-    if (hydratedToken === token) return;
-    hydratedToken = token;
+    if (syncedUserId === userId) return;
+    syncedUserId = userId;
     suppressSave = true;
     try {
-        await hydrateScopedLocalStores();
+        // 同一浏览器换账号时先清空本地库，避免上一个账号的画布/资产混入。
+        if (window.localStorage.getItem(LAST_USER_KEY) !== userId) {
+            await clearLocalData();
+            window.localStorage.setItem(LAST_USER_KEY, userId);
+        }
+        await Promise.all([waitForHydration(useCanvasStore), waitForHydration(useAssetStore)]);
         await Promise.all([hydrateCanvas(token), hydrateAssets(token), hydrateLogs("image-workbench", token), hydrateLogs("video-workbench", token)]);
     } finally {
         suppressSave = false;
     }
     queueSave("canvas");
     queueSave("assets");
-    queueSave("image-workbench");
-    queueSave("video-workbench");
+    void saveLogDomains();
 }
 
 export function stopUserDataSync() {
     currentToken = "";
-    hydratedToken = "";
+    syncedUserId = "";
     for (const timer of saveTimers.values()) clearTimeout(timer);
     saveTimers.clear();
-}
-
-export function notifyUserDataChanged(domain: UserDataDomain) {
-    queueSave(domain);
+    savedPayloads.clear();
+    unsubscribers.forEach((unsubscribe) => unsubscribe());
+    unsubscribers = [];
 }
 
 function setupSubscriptions() {
     if (unsubscribers.length) return;
+    // ponytail: 工作台日志直接写 localforage，没有可订阅的 store，
+    // 因此只在页面隐藏时整体回存；要做到实时回存需改 image/video 页面派发变更事件。
+    const onHidden = () => {
+        if (document.visibilityState === "hidden") void saveLogDomains();
+    };
+    document.addEventListener("visibilitychange", onHidden);
     unsubscribers = [
         useCanvasStore.subscribe(() => queueSave("canvas")),
         useAssetStore.subscribe(() => queueSave("assets")),
-        () => window.removeEventListener("infinite-canvas:image-logs-changed", imageLogsChanged),
-        () => window.removeEventListener("infinite-canvas:video-logs-changed", videoLogsChanged),
+        () => document.removeEventListener("visibilitychange", onHidden),
     ];
-    window.addEventListener("infinite-canvas:image-logs-changed", imageLogsChanged);
-    window.addEventListener("infinite-canvas:video-logs-changed", videoLogsChanged);
-}
-
-function imageLogsChanged() {
-    queueSave("image-workbench");
-}
-
-function videoLogsChanged() {
-    queueSave("video-workbench");
 }
 
 function queueSave(domain: UserDataDomain) {
@@ -88,98 +76,56 @@ function queueSave(domain: UserDataDomain) {
         setTimeout(() => {
             saveTimers.delete(domain);
             void saveDomain(domain, currentToken);
-        }, 900),
+        }, SAVE_DELAY_MS),
     );
+}
+
+async function clearLocalData() {
+    useCanvasStore.getState().replaceProjects([]);
+    useAssetStore.getState().replaceAssets([]);
+    await Promise.all([imageLogStore.clear(), videoLogStore.clear()]);
 }
 
 async function hydrateCanvas(token: string) {
     const remote = await fetchUserDataSnapshot<CanvasData>("canvas", token).catch(() => null);
-    const remoteProjects = Array.isArray(remote?.data?.projects) ? remote.data.projects : [];
-    if (!remoteProjects.length) return;
-    const localProjects = useCanvasStore.getState().projects;
-    useCanvasStore.getState().replaceProjects(mergeById(localProjects, remoteProjects, "updatedAt"));
-}
-
-async function hydrateScopedLocalStores() {
-    await Promise.all([hydrateScopedCanvasStore(), hydrateScopedAssetStore()]);
-}
-
-async function hydrateScopedCanvasStore() {
-    const stored = await localForageStorage.getItem(scopedStoreKey(CANVAS_STORE_KEY));
-    if (stored) {
-        await useCanvasStore.persist.rehydrate();
-        return;
-    }
-    useCanvasStore.getState().replaceProjects([]);
-}
-
-async function hydrateScopedAssetStore() {
-    const stored = await localForageStorage.getItem(scopedStoreKey(ASSET_STORE_KEY));
-    if (stored) {
-        await useAssetStore.persist.rehydrate();
-        return;
-    }
-    useAssetStore.getState().replaceAssets([]);
+    const projects = remote?.data?.projects;
+    if (!Array.isArray(projects) || !projects.length) return;
+    useCanvasStore.getState().replaceProjects(mergeById(useCanvasStore.getState().projects, projects, "updatedAt"));
 }
 
 async function hydrateAssets(token: string) {
     const remote = await fetchUserDataSnapshot<AssetData>("assets", token).catch(() => null);
-    const remoteAssets = Array.isArray(remote?.data?.assets) ? remote.data.assets : [];
-    if (!remoteAssets.length) return;
-    const localAssets = useAssetStore.getState().assets;
-    useAssetStore.getState().replaceAssets(mergeById(localAssets, remoteAssets, "updatedAt"));
+    const assets = remote?.data?.assets;
+    if (!Array.isArray(assets) || !assets.length) return;
+    const merged = mergeById(useAssetStore.getState().assets, assets, "updatedAt");
+    useAssetStore.getState().replaceAssets(await Promise.all(merged.map(hydrateAsset)));
 }
 
 async function hydrateLogs(domain: "image-workbench" | "video-workbench", token: string) {
     const remote = await fetchUserDataSnapshot<LogData>(domain, token).catch(() => null);
-    const remoteLogs = Array.isArray(remote?.data?.logs) ? remote.data.logs : [];
-    if (!remoteLogs.length) return;
+    const logs = remote?.data?.logs;
+    if (!Array.isArray(logs) || !logs.length) return;
     const store = domain === "image-workbench" ? imageLogStore : videoLogStore;
-    const key = domain === "image-workbench" ? IMAGE_LOG_STORE_KEY : VIDEO_LOG_STORE_KEY;
-    const localLogs = await readScopedStoredLogs(store, key);
-    await replaceScopedStoredLogs(store, key, mergeById(localLogs, remoteLogs, "createdAt"));
-    window.dispatchEvent(new Event(domain === "image-workbench" ? "infinite-canvas:image-logs-hydrated" : "infinite-canvas:video-logs-hydrated"));
+    await replaceStoredLogs(store, mergeById(await readStoredLogs(store), logs, "createdAt"));
+}
+
+async function saveLogDomains() {
+    if (!currentToken || suppressSave) return;
+    await Promise.all([saveDomain("image-workbench", currentToken), saveDomain("video-workbench", currentToken)]);
 }
 
 async function saveDomain(domain: UserDataDomain, token: string) {
     const data = await domainData(domain);
-    await saveUserDataSnapshot(domain, data, token).catch(() => undefined);
+    // 日志域按页面隐藏整体回存，没有变更事件可依赖，因此比对上次快照跳过重复上传。
+    const payload = JSON.stringify(data);
+    if (savedPayloads.get(domain) === payload) return;
+    await saveUserDataSnapshot(domain, data, token)
+        .then(() => savedPayloads.set(domain, payload))
+        .catch(() => undefined);
 }
 
-async function domainData(domain: UserDataDomain): Promise<DomainData> {
+async function domainData(domain: UserDataDomain): Promise<CanvasData | AssetData | LogData> {
     if (domain === "canvas") return { projects: useCanvasStore.getState().projects };
     if (domain === "assets") return { assets: useAssetStore.getState().assets };
-    if (domain === "image-workbench") return { logs: await readScopedStoredLogs(imageLogStore, IMAGE_LOG_STORE_KEY) };
-    return { logs: await readScopedStoredLogs(videoLogStore, VIDEO_LOG_STORE_KEY) };
-}
-
-function mergeById<T extends { id?: string }>(local: T[], remote: T[], timeKey: string) {
-    const items = new Map<string, T>();
-    remote.forEach((item) => {
-        if (item.id) items.set(item.id, item);
-    });
-    local.forEach((item) => {
-        if (!item.id) return;
-        const current = items.get(item.id);
-        if (!current || itemTime(item as Record<string, unknown>, timeKey) >= itemTime(current as Record<string, unknown>, timeKey)) items.set(item.id, item);
-    });
-    return Array.from(items.values()).sort((a, b) => itemTime(b as Record<string, unknown>, timeKey) - itemTime(a as Record<string, unknown>, timeKey));
-}
-
-function itemTime(item: Record<string, unknown>, key: string) {
-    const value = item[key];
-    if (typeof value === "number") return value;
-    if (typeof value === "string") return Date.parse(value) || 0;
-    return 0;
-}
-
-function waitForHydration<T extends { hydrated: boolean }>(store: { getState: () => T; subscribe: (listener: (state: T) => void) => () => void }) {
-    if (store.getState().hydrated) return Promise.resolve();
-    return new Promise<void>((resolve) => {
-        const unsubscribe = store.subscribe((state) => {
-            if (!state.hydrated) return;
-            unsubscribe();
-            resolve();
-        });
-    });
+    return { logs: await readStoredLogs(domain === "image-workbench" ? imageLogStore : videoLogStore) };
 }
