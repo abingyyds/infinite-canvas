@@ -84,6 +84,15 @@ func TestResolveAIProxyPathKeepsSubRouterSingularVideoEndpoint(t *testing.T) {
 	}
 }
 
+func TestResolveAIProxyPathKeepsGatewaySeedanceOnVideos(t *testing.T) {
+	for _, path := range []string{"/videos", "/videos/task_abc", "/videos/task_abc/content"} {
+		got := resolveAIProxyPath("https://subrouter.example.com/v1", "seedance-2.0-480p", path)
+		if got != path {
+			t.Fatalf("path %q rewritten to %q", path, got)
+		}
+	}
+}
+
 func TestResolveAIProxyPathDoesNotRewriteNonSeedanceArkVideo(t *testing.T) {
 	got := resolveAIProxyPath("https://ark.cn-beijing.volces.com/api/v3", "grok-video", "/videos")
 	if got != "/videos" {
@@ -134,6 +143,17 @@ func TestPrepareAIProxyBodyMapsDynamicSeedanceDurationToDefault(t *testing.T) {
 	}
 	if payload["duration"] != float64(6) {
 		t.Fatalf("duration = %#v", payload["duration"])
+	}
+}
+
+func TestPrepareAIProxyBodyKeepsGatewaySeedanceJSONOnVideos(t *testing.T) {
+	raw := []byte(`{"model":"seedance-2.0-480p","prompt":"p","duration":6,"metadata":{"ratio":"16:9","resolution":"480p"}}`)
+	body, contentType, err := prepareAIProxyBody("/videos", "/videos", raw, "application/json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contentType != "application/json" || !bytes.Equal(body, raw) {
+		t.Fatalf("body = %s, contentType = %q", body, contentType)
 	}
 }
 

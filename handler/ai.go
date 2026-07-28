@@ -223,7 +223,11 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 	if !strings.HasPrefix(contentType, "application/json") {
 		return body, contentType, nil
 	}
-	if proxyPath == "/video/generations" {
+	var videoHead struct {
+		Model string `json:"model"`
+	}
+	_ = json.Unmarshal(body, &videoHead)
+	if proxyPath == "/video/generations" || isOpenAICompatibleSeedanceVideo(videoHead.Model) {
 		return prepareUnifiedVideoJSONBody(body, contentType)
 	}
 	if proxyPath != "/videos" {
@@ -677,8 +681,8 @@ func resolveAIProxyPath(baseURL string, modelName string, path string) string {
 		}
 		return path
 	}
-	if strings.Contains(strings.ToLower(modelName), "seedance") {
-		// non-Ark seedance channels (SubRouter etc.) serve video on the unified JSON endpoint
+	if strings.Contains(strings.ToLower(modelName), "doubao-seedance") {
+		// non-Ark channels exposing ark-named doubao-seedance serve it on the unified JSON endpoint
 		if path == "/videos" {
 			return "/video/generations"
 		}
@@ -687,6 +691,13 @@ func resolveAIProxyPath(baseURL string, modelName string, path string) string {
 		}
 	}
 	return path
+}
+
+// isOpenAICompatibleSeedanceVideo reports gateway-native seedance-* models, which
+// serve video on OpenAI-style /videos with a unified JSON body.
+func isOpenAICompatibleSeedanceVideo(modelName string) bool {
+	model := strings.ToLower(strings.TrimSpace(modelName))
+	return strings.Contains(model, "seedance") && !strings.Contains(model, "doubao-seedance")
 }
 
 func isOfficialXAIBaseURL(baseURL string) bool {

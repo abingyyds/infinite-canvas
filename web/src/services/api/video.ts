@@ -54,11 +54,6 @@ export function videoCreatePath(config: AiConfig, model: string, remote: boolean
     return isGrokImagineVideoModel(model) && (remote || isXAIBaseUrl(config.baseUrl)) ? "/videos/generations" : "/videos";
 }
 
-export function openAIVideoCreatePath(model: string) {
-    // new-api style gateways (SubRouter) serve seedance on the unified JSON endpoint
-    return isOpenAICompatibleSeedanceVideoModel(model) ? "/video/generations" : "/videos";
-}
-
 export function isOpenAICompatibleSeedanceVideoModel(model: string) {
     const value = model.toLowerCase();
     return value.includes("seedance") && !value.includes("doubao-seedance");
@@ -262,13 +257,13 @@ async function createLegacyGrokVideoTask(config: AiConfig, selectedModel: string
     }
 }
 
-/** SubRouter / new-api 风格网关把 seedance 放在统一的 JSON 视频端点上。 */
+/** SubRouter / new-api 风格网关把 seedance 放在 OpenAI 风格的 /videos 上，请求体是统一的 JSON。 */
 async function createUnifiedVideoTask(config: AiConfig, selectedModel: string, remote: boolean, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
     if (videoReferences.length || audioReferences.length) {
         throw new Error("当前渠道的 Seedance 模型暂不支持参考视频或参考音频，请移除后重试，或切换到火山方舟渠道");
     }
     const model = config.model;
-    const path = "/video/generations";
+    const path = "/videos";
     const duration = normalizeSeedanceDuration(config.videoSeconds);
     const images = await Promise.all(references.slice(0, SEEDANCE_REFERENCE_LIMITS.images).map((image) => resolveGrokImageUrl(config, remote, image)));
     const payload = {
@@ -296,7 +291,7 @@ async function createUnifiedVideoTask(config: AiConfig, selectedModel: string, r
 
 async function createOpenAIVideoTask(config: AiConfig, selectedModel: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
     const model = config.model;
-    const path = openAIVideoCreatePath(model);
+    const path = "/videos";
     const body = new FormData();
     body.append("model", model);
     body.append("prompt", prompt);
@@ -359,7 +354,7 @@ async function buildGrokImageReferences(config: AiConfig, remote: boolean, refer
 }
 
 async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, remote: boolean, options?: RequestOptions): Promise<VideoGenerationTaskState> {
-    const path = task.path || openAIVideoCreatePath(task.requestModel || config.model);
+    const path = task.path || "/videos";
     const params = remote && task.requestModel ? { model: task.requestModel } : undefined;
     try {
         const video = unwrapVideoResponse((await axios.get<ApiVideoResponse>(aiApiUrl(config, `${path}/${task.id}`), { headers: aiHeaders(config), params, signal: options?.signal })).data);

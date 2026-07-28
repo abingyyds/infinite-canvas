@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [修复] Seedance 视频改走网关的 /videos 端点，修复 model not found 报错。
+
 ## v0.10.0 - 2026-07-25
 
 + [新增] 提示词来源新增BananaPromptQuicker，并支持添加自定义标准 JSON 来源。
