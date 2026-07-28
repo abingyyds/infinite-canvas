@@ -53,4 +53,3 @@ func AdminDeletePrompts(w http.ResponseWriter, r *http.Request) {
 	}
 	OK(w, true)
 }
-

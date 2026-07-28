@@ -51,7 +51,6 @@ func New() *gin.Engine {
 	})
 	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
 	api.GET("/prompts/source.json", middleware.OptionalAuth, gin.WrapF(handler.PromptsSource))
-	api.GET("/prompt-image", gin.WrapF(handler.PromptImage))
 	// 代下载只针对用户自己配置的渠道地址，挂在 UserAuth 后面避免成为匿名可用的外链代理。
 	api.POST("/video-content", middleware.UserAuth, gin.WrapF(handler.VideoContent))
 	api.GET("/assets", middleware.OptionalAuth, gin.WrapF(handler.Assets))

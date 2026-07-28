@@ -2,7 +2,7 @@ import { Copy, FileText } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button, Card, Tag } from "antd";
 
-import { formatPromptDate, getPromptImageUrl, type Prompt } from "@/services/api/prompts";
+import { formatPromptDate, type Prompt } from "@/services/api/prompts";
 
 export function PromptCard({
     item,
@@ -28,7 +28,7 @@ export function PromptCard({
             styles={{ body: { padding: 0 } }}
             cover={
                 <button type="button" className="block w-full text-left" onClick={onOpen}>
-                    {item.coverUrl ? <img src={getPromptImageUrl(item.coverUrl)} alt={item.title} className="aspect-[4/3] w-full object-cover" loading="lazy" /> : <span className="grid aspect-[4/3] w-full place-items-center bg-stone-100 text-stone-400 dark:bg-stone-900 dark:text-stone-600"><FileText className="size-8" /></span>}
+                    {item.coverUrl ? <img src={item.coverUrl} alt={item.title} className="aspect-[4/3] w-full object-cover" loading="lazy" /> : <span className="grid aspect-[4/3] w-full place-items-center bg-stone-100 text-stone-400 dark:bg-stone-900 dark:text-stone-600"><FileText className="size-8" /></span>}
                 </button>
             }
         >

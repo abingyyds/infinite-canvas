@@ -1,4 +1,4 @@
-import { SITE_PROMPT_SOURCE_ID, type PromptSource } from "./prompt-source-presets";
+import type { PromptSource } from "./prompt-source-presets";
 
 export type RawPrompt = {
     id: string;
@@ -38,8 +38,7 @@ export async function runPromptSource(source: PromptSource, options?: RunOptions
     }
 
     const items = parseJsonSource(data, source);
-    // 站内库为空是管理员还没配提示词的正常状态，不当作来源错误。
-    if (source.builtIn && source.id !== SITE_PROMPT_SOURCE_ID && !items.length) throw new Error(`「${source.name}」未解析到有效提示词`);
+    if (source.builtIn && !items.length) throw new Error(`「${source.name}」未解析到有效提示词`);
     return items;
 }
 

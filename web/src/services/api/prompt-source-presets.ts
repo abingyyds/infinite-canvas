@@ -23,11 +23,7 @@ export function createPromptSource(source?: Partial<PromptSource>): PromptSource
     };
 }
 
-export const SITE_PROMPT_SOURCE_ID = "site-library";
-
 export const DEFAULT_PROMPT_SOURCES: PromptSource[] = [
-    // 站内提示词库由后端提供，管理后台维护，因此作为内置来源排在最前。
-    { id: SITE_PROMPT_SOURCE_ID, name: "站内提示词库", url: "/api/prompts/source.json", homepage: "", enabled: true, builtIn: true },
     registrySource("banana-prompt-quicker", "Banana Prompt Quicker", "https://glidea.github.io/banana-prompt-quicker/"),
     registrySource("davidwu-gpt-image2-prompts", "DavidWu GPT Image 2", "https://github.com/davidwuw0811-boop/awesome-gpt-image2-prompts"),
     registrySource("awesome-gpt-image", "Awesome GPT Image", "https://github.com/ZeroLu/awesome-gpt-image"),
