@@ -35,12 +35,9 @@ func SavePrompt(item model.Prompt) (model.Prompt, error) {
 		item.CreatedAt = now
 	}
 	item.UpdatedAt = now
-	category, ok := repository.PromptCategoryByCode(item.Category)
-	if !ok {
-		category = repository.PromptCategories()[0]
-		item.Category = category.Category
+	if _, ok := repository.PromptCategoryByCode(item.Category); !ok {
+		item.Category = repository.PromptCategories()[0].Category
 	}
-	item.GithubURL = ""
 	return repository.SavePrompt(item)
 }
 

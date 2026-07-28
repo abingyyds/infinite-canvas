@@ -1,7 +1,7 @@
 
-import { CopyOutlined, DeleteOutlined, EditOutlined, ExportOutlined, EyeOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, SyncOutlined } from "@ant-design/icons";
+import { CopyOutlined, DeleteOutlined, EditOutlined, ExportOutlined, EyeOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { ProTable, type ProColumns } from "@ant-design/pro-components";
-import { Button, Card, Col, Flex, Form, Image, Input, Modal, Row, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Button, Card, Col, Flex, Form, Image, Input, Modal, Row, Select, Space, Tag, Tooltip, Typography } from "antd";
 import { useEffect, useState } from "react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
@@ -20,7 +20,6 @@ export default function AdminPromptsPage() {
         pageSize,
         total,
         isLoading,
-        isSyncing,
         searchPrompts,
         changeCategory,
         changeTag,
@@ -28,7 +27,6 @@ export default function AdminPromptsPage() {
         changePageSize,
         resetFilters,
         refreshPrompts,
-        syncCategory,
         savePrompt: saveAdminPrompt,
         deletePrompt,
         deletePrompts,
@@ -41,7 +39,6 @@ export default function AdminPromptsPage() {
     const [deletingPrompt, setDeletingPrompt] = useState<Prompt | null>(null);
     const [selectedPromptIds, setSelectedPromptIds] = useState<string[]>([]);
     const [isBatchDeleteOpen, setIsBatchDeleteOpen] = useState(false);
-    const [isSyncOpen, setIsSyncOpen] = useState(false);
     const defaultCategory = categories[0]?.category || "";
     const categoryName = (category: string) => categories.find((item) => item.category === category)?.name || category;
     const categoryOptions = [{ label: "全部分类", value: "" }, ...categories.map((item) => ({ label: item.name, value: item.category }))];
@@ -191,9 +188,6 @@ export default function AdminPromptsPage() {
                         <Button key="batch-delete" danger icon={<DeleteOutlined />} disabled={!selectedPromptIds.length} onClick={() => setIsBatchDeleteOpen(true)}>
                             批量删除{selectedPromptIds.length ? ` ${selectedPromptIds.length}` : ""}
                         </Button>,
-                        <Button key="sync" icon={<SyncOutlined />} onClick={() => setIsSyncOpen(true)}>
-                            同步
-                        </Button>,
                         <Button key="add" type="primary" icon={<PlusOutlined />} onClick={() => setEditingPrompt({ category: defaultCategory, tags: [] })}>
                             新增
                         </Button>,
@@ -265,61 +259,6 @@ export default function AdminPromptsPage() {
                         </Space>
                     </Flex>
                 ) : null}
-            </Modal>
-
-            <Modal
-                title="同步远程提示词源"
-                open={isSyncOpen}
-                width={640}
-                onCancel={() => !isSyncing && setIsSyncOpen(false)}
-                mask={{ closable: !isSyncing }}
-                footer={
-                    <Button disabled={isSyncing} onClick={() => setIsSyncOpen(false)}>
-                        取消
-                    </Button>
-                }
-            >
-                <Table
-                    rowKey="category"
-                    dataSource={categories.filter((item) => item.remote)}
-                    pagination={false}
-                    columns={[
-                        {
-                            title: "远程源",
-                            dataIndex: "name",
-                            render: (_, item) => (
-                                <Flex align="center" gap={8}>
-                                    {item.name}
-                                    {item.githubUrl ? (
-                                        <Typography.Link href={item.githubUrl} target="_blank">
-                                            <ExportOutlined />
-                                        </Typography.Link>
-                                    ) : null}
-                                </Flex>
-                            ),
-                        },
-                        {
-                            title: "",
-                            key: "sync",
-                            width: 96,
-                            align: "right",
-                            render: (_, item) => (
-                                <Button
-                                    type="primary"
-                                    loading={isSyncing}
-                                    onClick={async () => {
-                                        try {
-                                            await syncCategory(item.category);
-                                            setIsSyncOpen(false);
-                                        } catch {}
-                                    }}
-                                >
-                                    同步
-                                </Button>
-                            ),
-                        },
-                    ]}
-                />
             </Modal>
 
             <Modal

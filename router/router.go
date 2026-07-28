@@ -84,7 +84,6 @@ func New() *gin.Engine {
 	admin.POST("/settings/channel-models", gin.WrapF(handler.AdminChannelModels))
 	admin.POST("/settings/channel-test", gin.WrapF(handler.AdminTestChannelModel))
 	admin.GET("/prompt-categories", gin.WrapF(handler.AdminPromptCategories))
-	admin.POST("/prompt-categories/sync", gin.WrapF(handler.AdminSyncPromptCategories))
 	admin.GET("/prompts", gin.WrapF(handler.AdminPrompts))
 	admin.POST("/prompts", gin.WrapF(handler.AdminSavePrompt))
 	admin.POST("/prompts/batch-delete", gin.WrapF(handler.AdminDeletePrompts))

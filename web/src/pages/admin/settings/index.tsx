@@ -34,7 +34,7 @@ const emptySettings: AdminSettings = {
         },
         auth: { allowRegister: true, linuxDo: { enabled: false } },
     },
-    private: { channels: [], promptSync: { enabled: true, cron: "*/5 * * * *" }, auth: { linuxDo: { clientId: "", clientSecret: "" } } },
+    private: { channels: [], auth: { linuxDo: { clientId: "", clientSecret: "" } } },
 };
 const emptyChannel: AdminModelChannel = { protocol: "openai", name: "", baseUrl: "", apiKey: "", models: [], weight: 1, enabled: true, remark: "" };
 
@@ -530,20 +530,6 @@ export default function AdminSettingsPage() {
                                         </Row>
                                     </Flex>
                                 </Card>
-                                <Card size="small" title="提示词定时同步">
-                                    <Row gutter={16} align="middle">
-                                        <Col xs={24} md={8}>
-                                            <Form.Item name={["private", "promptSync", "enabled"]} label="开启定时同步" valuePropName="checked">
-                                                <Switch />
-                                            </Form.Item>
-                                        </Col>
-                                        <Col xs={24} md={16}>
-                                            <Form.Item name={["private", "promptSync", "cron"]} label="Cron 表达式" extra="默认每 5 分钟同步内置 GitHub 远程提示词源">
-                                                <Input placeholder="*/5 * * * *" />
-                                            </Form.Item>
-                                        </Col>
-                                    </Row>
-                                </Card>
                                 <Button type="primary" icon={<PlusOutlined />} onClick={() => openChannelDrawer(null)}>
                                     新增渠道
                                 </Button>
@@ -852,10 +838,6 @@ function normalizeModelCosts(items: Partial<AdminSettings["public"]["modelChanne
 function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}): AdminSettings["private"] {
     return {
         channels: (setting.channels || []).map(normalizeChannel),
-        promptSync: {
-            enabled: setting.promptSync?.enabled !== false,
-            cron: setting.promptSync?.cron || "*/5 * * * *",
-        },
         auth: {
             linuxDo: {
                 clientId: setting.auth?.linuxDo?.clientId || "",

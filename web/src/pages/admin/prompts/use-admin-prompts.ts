@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App } from "antd";
 
-import { deleteAdminPrompt, deleteAdminPrompts, fetchAdminPrompts, fetchAdminPromptCategories, saveAdminPrompt, syncAdminPromptCategory, type AdminPromptCategory } from "@/services/api/admin";
+import { deleteAdminPrompt, deleteAdminPrompts, fetchAdminPrompts, fetchAdminPromptCategories, saveAdminPrompt } from "@/services/api/admin";
 import type { Prompt } from "@/services/api/prompts";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -32,18 +32,6 @@ export function useAdminPrompts() {
         queryFn: () => fetchAdminPrompts(token, { keyword, category, tag, page, pageSize }),
         enabled: Boolean(token),
         retry: false,
-    });
-
-    const syncMutation = useMutation({
-        mutationFn: (category: string) => syncAdminPromptCategory(token, category),
-        onSuccess: async (categories) => {
-            queryClient.setQueryData<AdminPromptCategory[]>(["admin", "prompt-categories", token], categories);
-            await queryClient.invalidateQueries({ queryKey: ["admin", "prompts"] });
-            message.success("远程提示词源已同步");
-        },
-        onError: (error) => {
-            message.error(error instanceof Error ? error.message : "同步失败");
-        },
     });
 
     const saveMutation = useMutation({
@@ -113,8 +101,6 @@ export function useAdminPrompts() {
         pageSize,
         total: data?.total || 0,
         isLoading: categoriesQuery.isFetching || promptsQuery.isFetching || saveMutation.isPending || deleteMutation.isPending || batchDeleteMutation.isPending,
-        isSyncing: syncMutation.isPending,
-        syncCategory: (category: string) => syncMutation.mutateAsync(category),
         searchPrompts: (value = keyword) => updateFilters({ keyword: value }),
         changeCategory: (value: string) => updateFilters({ category: value, tag: [] }),
         changeTag: (value: string[]) => updateFilters({ tag: value }),

@@ -8,7 +8,6 @@ type Prompt struct {
 	Prompt    string   `json:"prompt"`
 	Tags      []string `json:"tags" gorm:"serializer:json"`
 	Category  string   `json:"category" gorm:"index"`
-	GithubURL string   `json:"githubUrl" gorm:"-"`
 	Preview   string   `json:"preview"`
 	CreatedAt string   `json:"createdAt"`
 	UpdatedAt string   `json:"updatedAt"`
@@ -27,7 +26,5 @@ type PromptCategory struct {
 	Category    string `json:"category" gorm:"primaryKey"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	GithubURL   string `json:"githubUrl"`
-	Remote      bool   `json:"remote"`
 	UpdatedAt   string `json:"updatedAt"`
 }

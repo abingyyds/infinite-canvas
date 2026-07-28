@@ -6,8 +6,6 @@ export type AdminPromptCategory = {
     name: string;
     description: string;
     file: string;
-    githubUrl: string;
-    remote: boolean;
 };
 
 export type AdminUser = {
@@ -87,10 +85,6 @@ export async function deleteAdminCreditLog(token: string, id: string) {
 
 export async function fetchAdminPromptCategories(token: string) {
     return apiGet<AdminPromptCategory[]>("/api/admin/prompt-categories", undefined, token);
-}
-
-export async function syncAdminPromptCategory(token: string, category: string) {
-    return apiPost<AdminPromptCategory[]>("/api/admin/prompt-categories/sync", { category }, token);
 }
 
 export type AdminPromptQuery = {
@@ -196,10 +190,6 @@ export type AdminPublicSettings = {
 
 export type AdminPrivateSettings = {
     channels: AdminModelChannel[];
-    promptSync: {
-        enabled: boolean;
-        cron: string;
-    };
     auth: {
         linuxDo: {
             clientId: string;

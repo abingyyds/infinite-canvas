@@ -37,9 +37,6 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 	keepPrivateAPIKeys(&settings, normalizeSettings(saved))
 	keepPrivateAuthSecrets(&settings, normalizeSettings(saved))
 	result, err := repository.SaveSettings(settings, now())
-	if err == nil {
-		RefreshPromptSyncScheduler()
-	}
 	return hidePrivateAPIKeys(result), err
 }
 
@@ -124,7 +121,6 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 	if setting.Channels == nil {
 		setting.Channels = []model.ModelChannel{}
 	}
-	setting.PromptSync = normalizePromptSyncSetting(setting.PromptSync)
 	for i := range setting.Channels {
 		if setting.Channels[i].Protocol == "" {
 			setting.Channels[i].Protocol = "openai"

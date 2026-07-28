@@ -47,14 +47,6 @@ func ListPrompts(q model.Query) ([]model.Prompt, int64, error) {
 	if err := tx.Order("updated_at desc").Offset(q.Offset()).Limit(q.PageSize).Find(&items).Error; err != nil {
 		return nil, 0, err
 	}
-	categories, _ := ListPromptCategories()
-	githubURLs := map[string]string{}
-	for _, item := range categories {
-		githubURLs[item.Category] = item.GithubURL
-	}
-	for i := range items {
-		items[i].GithubURL = githubURLs[items[i].Category]
-	}
 	return items, total, nil
 }
 
@@ -86,7 +78,6 @@ func SavePrompt(item model.Prompt) (model.Prompt, error) {
 	} else if ok && item.CreatedAt == "" {
 		item.CreatedAt = saved.CreatedAt
 	}
-	item.GithubURL = ""
 	return item, db.Save(&item).Error
 }
 
@@ -106,27 +97,6 @@ func DeletePrompts(ids []string) error {
 		return err
 	}
 	return db.Delete(&model.Prompt{}, "id IN ?", ids).Error
-}
-
-// ReplacePromptCategory 用远程同步结果替换整个提示词分类。
-func ReplacePromptCategory(category model.PromptCategory, items []model.Prompt) error {
-	db, err := DB()
-	if err != nil {
-		return err
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("category = ?", category.Category).Delete(&model.Prompt{}).Error; err != nil {
-			return err
-		}
-		if len(items) == 0 {
-			return nil
-		}
-		for i := range items {
-			items[i].Category = category.Category
-			items[i].GithubURL = ""
-		}
-		return tx.Create(&items).Error
-	})
 }
 
 // applyPromptFilters 应用提示词列表的搜索条件。

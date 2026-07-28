@@ -56,15 +56,8 @@ type PublicLinuxDoAuthSetting struct {
 
 // PrivateSetting 私有配置。
 type PrivateSetting struct {
-	Channels   []ModelChannel     `json:"channels"`
-	PromptSync PromptSyncSetting  `json:"promptSync"`
-	Auth       PrivateAuthSetting `json:"auth"`
-}
-
-// PromptSyncSetting 提示词定时同步配置。
-type PromptSyncSetting struct {
-	Enabled *bool  `json:"enabled"`
-	Cron    string `json:"cron"`
+	Channels []ModelChannel     `json:"channels"`
+	Auth     PrivateAuthSetting `json:"auth"`
 }
 
 type PrivateAuthSetting struct {

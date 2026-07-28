@@ -2,16 +2,11 @@ package handler
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 
 	"github.com/basketikun/infinite-canvas/model"
 	"github.com/basketikun/infinite-canvas/service"
 )
-
-type adminSyncRequest struct {
-	Category string `json:"category"`
-}
 
 type adminBatchDeleteRequest struct {
 	IDs []string `json:"ids"`
@@ -59,16 +54,3 @@ func AdminDeletePrompts(w http.ResponseWriter, r *http.Request) {
 	OK(w, true)
 }
 
-func AdminSyncPromptCategories(w http.ResponseWriter, r *http.Request) {
-	var request adminSyncRequest
-	_ = json.NewDecoder(r.Body).Decode(&request)
-	log.Printf("sync prompt category start category=%s", request.Category)
-	categories, err := service.SyncPromptCategory(request.Category)
-	if err != nil {
-		log.Printf("sync prompt category failed category=%s err=%v", request.Category, err)
-		FailError(w, err)
-		return
-	}
-	log.Printf("sync prompt category done category=%s", request.Category)
-	OK(w, categories)
-}
