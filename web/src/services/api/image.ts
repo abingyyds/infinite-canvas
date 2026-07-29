@@ -115,6 +115,11 @@ const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
 
+/** gpt-image 系列的输出格式由服务端固定，带上 response_format / output_format 会被判 invalid_request。 */
+export function supportsImageFormatParams(model: string) {
+    return !model.toLowerCase().includes("gpt-image");
+}
+
 /** 走内置网关时后端会扣算力点，出图后刷新余额。 */
 function refreshGatewayUser(config: AiConfig, model: string) {
     if (isGatewayModel(config, model)) void useUserStore.getState().hydrateUser();
@@ -709,8 +714,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 ...(quality ? { quality } : {}),
                 ...(requestSize ? { size: requestSize } : {}),
                 ...(background ? { background } : {}),
-                response_format: "b64_json",
-                output_format: IMAGE_OUTPUT_FORMAT,
+                ...(supportsImageFormatParams(requestConfig.model) ? { response_format: "b64_json", output_format: IMAGE_OUTPUT_FORMAT } : {}),
             },
             {
                 headers: aiHeaders(requestConfig, "application/json"),
@@ -765,8 +769,10 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     formData.set("model", requestConfig.model);
     formData.set("prompt", withSystemPrompt(requestConfig, requestPrompt));
     formData.set("n", String(n));
-    formData.set("response_format", "b64_json");
-    formData.set("output_format", IMAGE_OUTPUT_FORMAT);
+    if (supportsImageFormatParams(requestConfig.model)) {
+        formData.set("response_format", "b64_json");
+        formData.set("output_format", IMAGE_OUTPUT_FORMAT);
+    }
     if (quality) {
         formData.set("quality", quality);
     }
@@ -839,7 +845,7 @@ async function requestEditJsonFallback(
                 ...(params.quality ? { quality: params.quality } : {}),
                 ...(params.size ? { size: params.size } : {}),
                 ...(params.background ? { background: params.background } : {}),
-                output_format: IMAGE_OUTPUT_FORMAT,
+                ...(supportsImageFormatParams(config.model) ? { output_format: IMAGE_OUTPUT_FORMAT } : {}),
                 input_fidelity: "high",
             },
             { headers: aiHeaders(config, "application/json"), signal: options?.signal },

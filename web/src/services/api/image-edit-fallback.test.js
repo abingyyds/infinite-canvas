@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { shouldRetryImageEditAsJson } from "./image";
+import { shouldRetryImageEditAsJson, supportsImageFormatParams } from "./image";
 
 describe("image edit JSON fallback trigger", () => {
     it("retries on gateway upload rejections", () => {
@@ -18,5 +18,18 @@ describe("image edit JSON fallback trigger", () => {
         expect(shouldRetryImageEditAsJson("请求被限流或额度不足，请稍后重试")).toBe(false);
         expect(shouldRetryImageEditAsJson("model gpt-image-2 not found")).toBe(false);
         expect(shouldRetryImageEditAsJson("")).toBe(false);
+    });
+});
+
+describe("image format params", () => {
+    it("omits them for gpt-image models", () => {
+        expect(supportsImageFormatParams("gpt-image-2-4K")).toBe(false);
+        expect(supportsImageFormatParams("gpt-image-2")).toBe(false);
+        expect(supportsImageFormatParams("gpt-image-1")).toBe(false);
+    });
+
+    it("keeps them for models that do accept them", () => {
+        expect(supportsImageFormatParams("dall-e-3")).toBe(true);
+        expect(supportsImageFormatParams("seedream-4-0")).toBe(true);
     });
 });
