@@ -54,9 +54,11 @@ export function videoCreatePath(config: AiConfig, model: string, remote: boolean
     return isGrokImagineVideoModel(model) && (remote || isXAIBaseUrl(config.baseUrl)) ? "/videos/generations" : "/videos";
 }
 
-export function isOpenAICompatibleSeedanceVideoModel(model: string) {
+/** 兼容网关上的 seedance / veo / omni 都收 JSON 版 /videos；官方 Sora 仍走 multipart。 */
+export function isUnifiedJsonVideoModel(model: string) {
     const value = model.toLowerCase();
-    return value.includes("seedance") && !value.includes("doubao-seedance");
+    if (value.includes("doubao-seedance")) return false;
+    return value.includes("seedance") || value.includes("veo-") || value.includes("omni-");
 }
 
 export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationResult> {
@@ -82,7 +84,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     const remote = isGatewayModel(config, selectedModel);
     const model = requestConfig.model;
     const isGrokVideo = isGrokImagineVideoModel(model);
-    const isOpenAIVideoJson = isGrokVideo || isOpenAICompatibleSeedanceVideoModel(model);
+    const isOpenAIVideoJson = isGrokVideo || isUnifiedJsonVideoModel(model);
     if (isSeedanceVideoConfig(requestConfig)) {
         return createSeedanceTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
     }

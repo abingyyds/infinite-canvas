@@ -227,7 +227,7 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 		Model string `json:"model"`
 	}
 	_ = json.Unmarshal(body, &videoHead)
-	if proxyPath == "/video/generations" || isOpenAICompatibleSeedanceVideo(videoHead.Model) {
+	if proxyPath == "/video/generations" || isUnifiedJSONVideo(videoHead.Model) {
 		return prepareUnifiedVideoJSONBody(body, contentType)
 	}
 	if proxyPath != "/videos" {
@@ -693,11 +693,14 @@ func resolveAIProxyPath(baseURL string, modelName string, path string) string {
 	return path
 }
 
-// isOpenAICompatibleSeedanceVideo reports gateway-native seedance-* models, which
-// serve video on OpenAI-style /videos with a unified JSON body.
-func isOpenAICompatibleSeedanceVideo(modelName string) bool {
+// isUnifiedJSONVideo reports gateway-native video models, which serve video on
+// OpenAI-style /videos with a unified JSON body instead of multipart.
+func isUnifiedJSONVideo(modelName string) bool {
 	model := strings.ToLower(strings.TrimSpace(modelName))
-	return strings.Contains(model, "seedance") && !strings.Contains(model, "doubao-seedance")
+	if strings.Contains(model, "doubao-seedance") {
+		return false
+	}
+	return strings.Contains(model, "seedance") || strings.Contains(model, "veo-") || strings.Contains(model, "omni-")
 }
 
 func isOfficialXAIBaseURL(baseURL string) bool {

@@ -168,6 +168,30 @@ func TestPrepareAIProxyBodyKeepsUnifiedVideoJSONUntouched(t *testing.T) {
 	}
 }
 
+func TestPrepareAIProxyBodyKeepsVeoAndOmniVideoJSONUntouched(t *testing.T) {
+	for _, model := range []string{"veo-3-1-fast", "veo-3-1-ref", "omni-fast", "omni-v2v-no-water"} {
+		raw := []byte(`{"model":"` + model + `","prompt":"p","duration":6,"metadata":{"ratio":"adaptive","resolution":"720p"}}`)
+		body, contentType, err := prepareAIProxyBody("/videos", "/videos", raw, "application/json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if contentType != "application/json" || !bytes.Equal(body, raw) {
+			t.Fatalf("%s: body = %s, contentType = %q", model, body, contentType)
+		}
+	}
+}
+
+func TestPrepareAIProxyBodyStillConvertsOfficialVideoModelToMultipart(t *testing.T) {
+	raw := []byte(`{"model":"sora-2","prompt":"p","seconds":"6","size":"1280x720"}`)
+	_, contentType, err := prepareAIProxyBody("/videos", "/videos", raw, "application/json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(contentType, "multipart/form-data") {
+		t.Fatalf("contentType = %q", contentType)
+	}
+}
+
 func TestPrepareAIProxyBodyConvertsSubRouterGrokVideoToLegacyJSON(t *testing.T) {
 	raw := []byte(`{"model":"grok-video-1.5","prompt":"产品图轻微旋转展示","image":{"url":"https://example.com/first.jpg"},"duration":6,"aspect_ratio":"9:16"}`)
 	body, contentType, err := prepareAIProxyBody("/videos/generations", "/videos", raw, "application/json")
