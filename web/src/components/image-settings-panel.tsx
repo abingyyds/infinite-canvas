@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
 import { type CanvasTheme } from "@/lib/canvas-theme";
+import { resolveRatioSize } from "@/services/api/image";
 import type { AiConfig } from "@/stores/use-config-store";
 
 const qualityOptions = [
@@ -22,20 +23,28 @@ const aspectOptions = [
     { value: "3:4", label: "3:4", width: 1024, height: 1360, icon: "portrait" },
     { value: "16:9", label: "16:9", width: 1824, height: 1024, icon: "landscape" },
     { value: "9:16", label: "9:16", width: 1024, height: 1824, icon: "portrait" },
-    { value: "1:1-2k", label: "1:1(2k)", size: "2048x2048", width: 2048, height: 2048, icon: "square" },
-    { value: "16:9-2k", label: "16:9(2k)", size: "2048x1152", width: 2048, height: 1152, icon: "landscape" },
-    { value: "9:16-2k", label: "9:16(2k)", size: "1152x2048", width: 1152, height: 2048, icon: "portrait" },
-    { value: "16:9-4k", label: "16:9(4k)", size: "3840x2160", width: 3840, height: 2160, icon: "landscape" },
-    { value: "9:16-4k", label: "9:16(4k)", size: "2160x3840", width: 2160, height: 3840, icon: "portrait" },
     { value: "auto", label: "auto", width: 0, height: 0, icon: "auto" },
 ];
 
+const resolutionOptions = [
+    { value: "auto", labelKey: "auto" },
+    { value: "1k", label: "1k" },
+    { value: "2k", label: "2k" },
+    { value: "4k", label: "4k" },
+];
+
 export const imageQualityOptions = qualityOptions.map((item) => ({ value: item.value, get label() { return i18n.t(`settingsPanels.common.${item.labelKey}`); } }));
-export const imageAspectOptions = aspectOptions.map((item) => ({ value: item.size || item.value, label: item.label }));
+export const imageAspectOptions = aspectOptions.map((item) => ({ value: item.value, label: item.label }));
+export const imageResolutionOptions = resolutionOptions.map((item) => ({
+    value: item.value,
+    get label() {
+        return item.label || i18n.t(`settingsPanels.common.${item.labelKey}`);
+    },
+}));
 
 type ImageSettingsPanelProps = {
     config: AiConfig;
-    onConfigChange: (key: "quality" | "size" | "count" | "background", value: string) => void;
+    onConfigChange: (key: "quality" | "resolution" | "size" | "count" | "background", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     className?: string;
@@ -47,14 +56,14 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
     const { t } = useTranslation();
     const [snapDimensionToStep, setSnapDimensionToStep] = useState(true);
     const quality = config.quality || "auto";
+    const resolution = config.resolution || "auto";
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
     const transparentBackground = config.background === "transparent";
-    const selectedAspect = aspectOptions.find((item) => (item.size || item.value) === activeSize || item.value === activeSize);
-    const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0]);
+    const selectedAspect = aspectOptions.find((item) => item.value === activeSize);
+    const dimensions = readSizeDimensions(activeSize, scaleAspect(selectedAspect || aspectOptions[0], resolution));
     const selectAspect = (value: string) => {
-        const option = aspectOptions.find((item) => item.value === value);
-        onConfigChange("size", option?.size || option?.value || "auto");
+        onConfigChange("size", aspectOptions.find((item) => item.value === value)?.value || "auto");
     };
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 1024));
@@ -81,6 +90,16 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         {qualityOptions.map((item) => (
                             <OptionPill key={item.value} selected={quality === item.value} theme={theme} onClick={() => onConfigChange("quality", item.value)}>
                                 {t(`settingsPanels.common.${item.labelKey}`)}
+                            </OptionPill>
+                        ))}
+                    </div>
+                </div>
+                <div className="space-y-2.5">
+                    <SettingTitle color={theme.node.muted}>{t("settingsPanels.image.resolution")}</SettingTitle>
+                    <div className="grid grid-cols-4 gap-2.5">
+                        {resolutionOptions.map((item) => (
+                            <OptionPill key={item.value} selected={resolution === item.value} theme={theme} onClick={() => onConfigChange("resolution", item.value)}>
+                                {item.label || t(`settingsPanels.common.${item.labelKey}`)}
                             </OptionPill>
                         ))}
                     </div>
@@ -117,6 +136,7 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                             >
                                 <AspectIcon type={item.icon} width={item.width} height={item.height} color={theme.node.text} />
                                 <span>{item.label}</span>
+                                {item.width && resolution !== "auto" ? <span className="text-[10px] leading-none opacity-55">{scaleAspect(item, resolution).width}×{scaleAspect(item, resolution).height}</span> : null}
                             </button>
                         ))}
                     </div>
@@ -166,7 +186,7 @@ export function imageQualityLabel(value: string) {
 }
 
 export function imageSizeLabel(size: string) {
-    return aspectOptions.find((item) => (item.size || item.value) === size || item.value === size)?.label || size;
+    return aspectOptions.find((item) => item.value === size)?.label || size;
 }
 
 function OptionPill({ selected, theme, onClick, children }: { selected: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {
@@ -247,6 +267,17 @@ function SettingTitle({ children, color }: { children: string; color: string }) 
             {children}
         </div>
     );
+}
+
+/** 比例按钮上的固定尺寸只代表 auto 档，选了分辨率后要按同一套换算刷新预览的宽高。 */
+function scaleAspect(option: { value: string; width: number; height: number }, resolution: string) {
+    if (!option.width || !option.height || resolution === "auto") return option;
+    try {
+        const [width, height] = resolveRatioSize(resolution, option.value).split("x").map(Number);
+        return { ...option, width, height };
+    } catch {
+        return option;
+    }
 }
 
 function readSizeDimensions(size: string, fallback: { width: number; height: number }) {

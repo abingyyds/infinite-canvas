@@ -47,6 +47,8 @@ export type AiConfig = {
     reasoningEffort: ReasoningEffort;
     models: string[];
     quality: string;
+    /** 出图分辨率档位：auto / 1k / 2k / 4k；auto 表示不指定，由比例按默认短边算 */
+    resolution: string;
     size: string;
     background: string;
     count: string;
@@ -105,6 +107,7 @@ export const defaultConfig: AiConfig = {
     reasoningEffort: "auto",
     models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
     quality: "auto",
+    resolution: "auto",
     size: "1:1",
     background: "",
     count: "1",
@@ -247,6 +250,7 @@ export const useConfigStore = create<ConfigStore>()(
                         videoGenerateAudio: config.videoGenerateAudio || "true",
                         videoWatermark: config.videoWatermark || "false",
                         canvasImageCount: config.canvasImageCount || "3",
+                        resolution: config.resolution || "auto",
                     },
                 };
             },
