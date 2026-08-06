@@ -18,7 +18,7 @@ export enum CanvasNodeType {
     Group = "group",
 }
 
-// 节点类型放开为字符串,内置类型用 CanvasNodeType,插件类型为 "<pluginId>:<name>"
+// Node types are open strings: built-ins use CanvasNodeType and plugins use "<pluginId>:<name>".
 export type CanvasNodeTypeId = CanvasNodeType | (string & {});
 
 export type CanvasNodeStatus = "idle" | "success" | "loading" | "error";
@@ -35,6 +35,7 @@ export type CanvasNodeMetadata = {
     generationMode?: CanvasGenerationMode;
     generationType?: CanvasImageGenerationType;
     model?: string;
+    reasoningEffort?: "auto" | "low" | "medium" | "high" | "xhigh";
     size?: string;
     quality?: string;
     background?: string;
@@ -62,7 +63,7 @@ export type CanvasNodeMetadata = {
     bytes?: number;
     durationMs?: number;
     groupId?: string;
-    interactive?: boolean; // 插件节点「交互 ⇄ 移动」开关状态(见 CanvasNodeDefinition.interactionToggle)
+    interactive?: boolean; // Plugin node interaction/move state; see CanvasNodeDefinition.interactionToggle.
 };
 
 export type CanvasNodeData = {

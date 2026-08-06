@@ -3,8 +3,11 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
-export type ApiCallFormat = "openai" | "gemini";
+import i18n from "@/i18n";
+
+export type ApiCallFormat = "openai" | "gemini" | "ark";
 export type ModelCapability = "image" | "video" | "text" | "audio";
+export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
 
 export type ChannelModel = {
     name: string;
@@ -41,6 +44,7 @@ export type AiConfig = {
     videoGenerateAudio: string;
     videoWatermark: string;
     systemPrompt: string;
+    reasoningEffort: ReasoningEffort;
     models: string[];
     quality: string;
     size: string;
@@ -62,6 +66,7 @@ export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 const CHANNEL_MODEL_SEPARATOR = "::";
 const OPENAI_BASE_URL = "https://api.openai.com";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
+const ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
@@ -71,7 +76,7 @@ export const defaultConfig: AiConfig = {
     channels: [
         {
             id: "default",
-            name: "默认渠道",
+            name: i18n.t("config.channels.defaultName"),
             baseUrl: OPENAI_BASE_URL,
             apiKey: "",
             apiFormat: "openai",
@@ -97,6 +102,7 @@ export const defaultConfig: AiConfig = {
     videoGenerateAudio: "true",
     videoWatermark: "false",
     systemPrompt: "",
+    reasoningEffort: "auto",
     models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
     quality: "auto",
     size: "1:1",
@@ -155,6 +161,14 @@ export function modelCapabilityOf(config: AiConfig, value: string): ModelCapabil
 export function modelMatchesCapability(config: AiConfig, value: string, capability?: ModelCapability) {
     if (!capability) return true;
     return modelCapabilityOf(config, value) === capability;
+}
+
+export function resolveModelForCapability(config: AiConfig, currentModel: string | undefined, capability: ModelCapability) {
+    const defaultModel = capability === "image" ? config.imageModel : capability === "video" ? config.videoModel : capability === "audio" ? config.audioModel : config.textModel;
+    const fallbackModel = capability === "image" ? defaultConfig.imageModel : capability === "video" ? defaultConfig.videoModel : capability === "audio" ? defaultConfig.audioModel : defaultConfig.textModel;
+    if (currentModel && modelMatchesCapability(config, currentModel, capability)) return currentModel;
+    if (defaultModel && modelMatchesCapability(config, defaultModel, capability)) return defaultModel;
+    return fallbackModel;
 }
 
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
@@ -227,6 +241,7 @@ export const useConfigStore = create<ConfigStore>()(
                         audioFormat: config.audioFormat || defaultConfig.audioFormat,
                         audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
                         audioInstructions: config.audioInstructions || "",
+                        reasoningEffort: config.reasoningEffort || "auto",
                         videoSeconds: config.videoSeconds || "6",
                         vquality: config.vquality || "720",
                         videoGenerateAudio: config.videoGenerateAudio || "true",
@@ -263,7 +278,7 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
     const apiFormat = normalizeApiFormat(channel?.apiFormat);
     return {
         id: channel?.id?.trim() || nanoid(),
-        name: channel?.name?.trim() || "新渠道",
+        name: channel?.name?.trim() || i18n.t("config.channels.newName"),
         baseUrl: channel?.baseUrl?.trim() || defaultBaseUrlForApiFormat(apiFormat),
         apiKey: channel?.apiKey || "",
         apiFormat,
@@ -316,7 +331,7 @@ export function resolveModelChannel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
     const model = decoded?.model || value;
     const matched = decoded ? config.channels.find((channel) => channel.id === decoded.channelId) : config.channels.find((channel) => channel.models.some((item) => item.name === model));
-    return matched || config.channels[0] || createModelChannel({ id: "default", name: "默认渠道", baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, models: config.models.map(modelOptionName).map((name) => ({ name, capability: guessCapability(name) })) });
+    return matched || config.channels[0] || createModelChannel({ id: "default", name: i18n.t("config.channels.defaultName"), baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, models: config.models.map(modelOptionName).map((name) => ({ name, capability: guessCapability(name) })) });
 }
 
 export function resolveModelRequestConfig(config: AiConfig, value: string) {
@@ -336,7 +351,7 @@ function normalizeChannels(config: AiConfig) {
         createModelChannel({
             ...channel,
             id: channel.id || (index === 0 ? "default" : `channel-${index + 1}`),
-            name: channel.name || (index === 0 ? "默认渠道" : `渠道 ${index + 1}`),
+            name: channel.name || (index === 0 ? i18n.t("config.channels.defaultName") : i18n.t("config.channels.indexedName", { index: index + 1 })),
             models: normalizeChannelModels(channel.models),
         }),
     );
@@ -344,7 +359,7 @@ function normalizeChannels(config: AiConfig) {
         channels.push(
             createModelChannel({
                 id: "default",
-                name: "默认渠道",
+                name: i18n.t("config.channels.defaultName"),
                 baseUrl: config.baseUrl || defaultConfig.baseUrl,
                 apiKey: config.apiKey || "",
                 apiFormat: config.apiFormat || defaultConfig.apiFormat,
@@ -356,11 +371,13 @@ function normalizeChannels(config: AiConfig) {
 }
 
 export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {
-    return apiFormat === "gemini" ? GEMINI_BASE_URL : OPENAI_BASE_URL;
+    if (apiFormat === "gemini") return GEMINI_BASE_URL;
+    if (apiFormat === "ark") return ARK_BASE_URL;
+    return OPENAI_BASE_URL;
 }
 
 function normalizeApiFormat(apiFormat: unknown): ApiCallFormat {
-    return apiFormat === "gemini" ? "gemini" : "openai";
+    return apiFormat === "gemini" || apiFormat === "ark" ? apiFormat : "openai";
 }
 
 function uniqueModelOptions(models: string[]) {
