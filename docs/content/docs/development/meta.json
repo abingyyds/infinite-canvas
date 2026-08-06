@@ -5,6 +5,7 @@
   "pages": [
     "local-development",
     "canvas-data-structure",
+    "subrouter-media-models",
     "local-codex-canvas"
   ]
 }

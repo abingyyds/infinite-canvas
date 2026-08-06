@@ -1,0 +1,107 @@
+---
+title: SubRouter 图片与视频模型接入
+description: SubRouter 网关上各图片 / 视频模型的端点、请求体形状、响应形状与已知限制
+---
+
+# SubRouter 图片与视频模型接入
+
+本文记录 SubRouter（`https://subrouter.ai`）上图片和视频模型的实际接口行为，供接入新模型时对照。
+
+所有结论均来自对网关的真实请求（`canvas-auto-*` 令牌，`subrouter` 分组）。文中「实测状态」一节会随网关变化过期，「接口契约」一节相对稳定。
+
+## 接口契约
+
+### 图片
+
+统一走 OpenAI 风格端点，前端代码在 `web/src/services/api/image.ts`：
+
+| 用途 | 端点 | 请求体 |
+| --- | --- | --- |
+| 文生图 | `POST /v1/images/generations` | JSON |
+| 图生图 / 局部重绘 | `POST /v1/images/edits` | multipart；部分渠道不收 multipart，代码会自动回退成 JSON + base64 |
+
+响应统一是 `{ data: [{ b64_json }] }` 或 `{ data: [{ url }] }`，两种都要能解析（`resolveImageDataUrl`）。
+
+**`response_format` / `output_format` 是坑。** gpt-image 系列的输出格式由服务端固定，带上这两个参数会直接 400 `invalid_request`。由 `supportsImageFormatParams()` 控制是否发送——匹配 `gpt-image` 的模型一律不发。其它模型（如 DALL·E 系）默认返回 url，必须靠 `response_format: "b64_json"` 才拿到 base64，不能一刀切删掉。
+
+### 视频
+
+**所有视频模型都在 `POST /v1/videos`。** `/v1/videos/generations` 在这个网关上不存在，直接 404 `Invalid URL`。后端 `resolveAIProxyPath()`（`handler/ai.go`）负责把前端的 `/videos/generations` 改写过去。
+
+请求体有两套形状，由 `isUnifiedJsonVideoModel()`（前端）和 `isUnifiedJSONVideo()`（后端 `handler/ai.go`）共同决定——**两处必须同步改，只改前端无效**，后端 `prepareAIProxyBody()` 会把 JSON 重新打包成 multipart。
+
+统一 JSON 体（这个网关上的所有视频模型都用这套）：
+
+```json
+{
+  "model": "veo-3-1-fast",
+  "prompt": "...",
+  "duration": 6,
+  "metadata": {
+    "ratio": "16:9",
+    "resolution": "720p",
+    "generate_audio": true,
+    "watermark": false
+  },
+  "image": "https://...",
+  "images": ["https://..."]
+}
+```
+
+`metadata.ratio` 传 `adaptive` 和具体比例都可以；`resolution` 用 `480p` / `720p` / `1080p`。
+
+multipart 体（`model` / `prompt` / `seconds` / `size` / `resolution_name` / `preset` / `input_reference[]`）只给官方 OpenAI Sora 用。这个网关的模型收到 multipart 会返回 400 `Request parameters are invalid`。
+
+轮询与取片：
+
+```
+GET  /v1/videos/{task_id}?model={model}     → status: queued → in_progress → completed
+GET  /v1/videos/{task_id}/content           → 视频二进制
+```
+
+完成后返回的 `url` 是网关的绝对地址且需要鉴权，浏览器不能直接取，走 `remoteVideoContentProxyUrl()` 由后端代下载。
+
+## 实测状态（2026-07-31）
+
+### 图片
+
+| 模型 | 状态 | 返回 | 备注 |
+| --- | --- | --- | --- |
+| `gpt-image-2` | 可用 | `b64_json`，约 2.2 MB | 慢，经常超过 Cloudflare 的 100s 上限返回 **524**；三次里中过两次 |
+| `gpt-image-2-4K` | 可用 | `url`（`chatimage2-img*.shyfai.cn`） | `response_format` 和 `output_format` 都会 400 |
+| `gemini-3-pro-image-preview` | 不可用 | — | `/v1/images/generations` 报 `only imagen models are supported`；Gemini 原生 `/v1beta/...:generateContent` 报分组 `gemini按次` 无渠道 |
+| `gemini-3.1-flash-image-preview` | 不可用 | — | 同上，网关内部把模型名截成 `gemini-3.1-flash-image` 后找不到渠道 |
+
+### 视频
+
+| 模型 | 状态 |
+| --- | --- |
+| `veo-3-1-fast` | **完整验证过**：建任务 → 轮询 → 出片，约 125–170 秒 |
+| `veo-3-1`、`veo-3-1-ref` | 通过参数校验，未跑完整流程 |
+| `omni-fast`、`omni-fast-no-water`、`omni-v2v`、`omni-v2v-no-water` | 通过参数校验，未跑完整流程 |
+| `seedance-2.0` / `-fast` / `-mini` / `-480p` / `-fast-480p` | **不可用**：500 `fail_to_fetch_task` → 内层 `do_request_failed` "Generation timed out"。短提示词也复现，是网关上游的问题 |
+| `grok-imagine-video-1.5-preview` | **不可用**：400 `invalid_api_platform: 48`，渠道类型不被视频中转支持 |
+| `grok-video-1.5`、`grok-imagine-video-1.5` | 这两个名字在网关上不存在，只有 `-preview` 那个 |
+
+## 报错速查
+
+网关的错误分四类，看清是哪类能少走弯路：
+
+| 报错 | 含义 |
+| --- | --- |
+| 403 `该令牌无权访问模型 X` | 令牌开了 `model_limits` 白名单，X 不在里面。换一个不限制的令牌 |
+| 503 `该分组下模型无可用渠道` | 令牌所在分组没有这个模型 |
+| 503 `No available channel for model X under group Y (distributor)` | 网关内部把模型改名 / 改组后没有渠道 |
+| 400 `invalid_api_platform: N` | 模型对应的渠道类型不支持这个端点（14 = Anthropic 系，48 = grok imagine） |
+| 400 `X does not support <param>` | 模型不收这个参数，见上面 `response_format` 那节 |
+| 500 `fail_to_fetch_task` | 网关透传的上游错误，真正原因在嵌套的内层 `message` 里 |
+| 524 | Cloudflare 100 秒超时，不是网关的错误，是模型太慢 |
+
+`fail_to_fetch_task` 这类错误的 `message` 是一段 JSON 字符串，里面还可能再套一层——每一跳中转都会把下一跳的完整响应字符串化塞进自己的 `message`，剥到最里层才是根因。
+
+## 接一个新模型要改的地方
+
+1. `web/src/services/api/image.ts` — `supportsImageFormatParams()`：新图片模型是否收 `response_format` / `output_format`
+2. `web/src/services/api/video.ts` — `isUnifiedJsonVideoModel()`：新视频模型走 JSON 还是 multipart；`videoCreatePath()`：走哪个端点
+3. `handler/ai.go` — `isUnifiedJSONVideo()` 必须和前端同步；`resolveAIProxyPath()` 处理端点改写
+4. `service/settings.go` 的 `ModelCost()` — 未配置价格的模型按 0 算力点计费，上线前要在管理端补一条
