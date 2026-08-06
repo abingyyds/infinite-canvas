@@ -21,6 +21,55 @@ func TestAIUpstreamErrorDetailExplainsSensitiveVideo(t *testing.T) {
 	}
 }
 
+func TestAIUpstreamErrorDetailExplainsGatewayCodes(t *testing.T) {
+	got := aiUpstreamErrorDetail([]byte(`{"error":{"code":"bad_response_status_code","message":"The origin web server returned an invalid or incomplete response to Cloudflare."}}`))
+	if !strings.Contains(got, "上游过载或故障") {
+		t.Fatalf("detail = %q", got)
+	}
+	// 原始错误必须保留，否则排查时拿不到 Cloudflare 那句话
+	if !strings.Contains(got, "bad_response_status_code") || !strings.Contains(got, "origin web server") {
+		t.Fatalf("original error dropped: %q", got)
+	}
+
+	empty := aiUpstreamErrorDetail([]byte(`{"error":{"code":"empty_response","message":"gpt-image-2-4k completed without a PNG URL"}}`))
+	if !strings.Contains(empty, "没有可用的图片") || !strings.Contains(empty, "without a PNG URL") {
+		t.Fatalf("detail = %q", empty)
+	}
+
+	// 未知错误码保持原样，不要瞎翻译
+	unknown := aiUpstreamErrorDetail([]byte(`{"error":{"code":"some_new_code","message":"whatever"}}`))
+	if unknown != "some_new_code whatever" {
+		t.Fatalf("detail = %q", unknown)
+	}
+}
+
+func TestAIStatusMessageSeparatesUpstreamOutage(t *testing.T) {
+	if got := aiStatusMessage(502); got != "AI 上游服务暂时不可用，请稍后重试" {
+		t.Fatalf("502 = %q", got)
+	}
+	if got := aiStatusMessage(504); got != "AI 上游服务暂时不可用，请稍后重试" {
+		t.Fatalf("504 = %q", got)
+	}
+	if got := aiStatusMessage(429); got != "AI 接口限流或额度不足，请稍后重试或检查额度" {
+		t.Fatalf("429 = %q", got)
+	}
+	if got := aiStatusMessage(400); got != "AI 接口请求失败" {
+		t.Fatalf("400 = %q", got)
+	}
+}
+
+func TestProxyFailureStatusKeepsSessionAlive(t *testing.T) {
+	// 上游 401 是网关密钥失效，透传出去会被前端拦截器当成会话过期直接登出
+	if got := proxyFailureStatus(401); got != 502 {
+		t.Fatalf("401 -> %d, want 502", got)
+	}
+	for _, status := range []int{400, 403, 429, 500, 502, 503, 504} {
+		if got := proxyFailureStatus(status); got != status {
+			t.Fatalf("%d -> %d, want passthrough", status, got)
+		}
+	}
+}
+
 func TestSafeUpstreamTextTruncates(t *testing.T) {
 	got := safeUpstreamText(strings.Repeat("错", 320))
 	if len([]rune(got)) != 303 {

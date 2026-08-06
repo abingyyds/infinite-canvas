@@ -166,7 +166,7 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, modelName stri
 		if onFailure != nil {
 			onFailure()
 		}
-		Fail(w, aiUpstreamStatusMessage(response.StatusCode, body))
+		FailStatus(w, proxyFailureStatus(response.StatusCode), aiUpstreamStatusMessage(response.StatusCode, body))
 		return
 	}
 
@@ -723,9 +723,20 @@ func aiStatusMessage(statusCode int) string {
 		return "AI 接口鉴权失败，请检查 API Key、套餐权限或模型权限"
 	case http.StatusTooManyRequests:
 		return "AI 接口限流或额度不足，请稍后重试或检查额度"
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return "AI 上游服务暂时不可用，请稍后重试"
 	default:
 		return "AI 接口请求失败"
 	}
+}
+
+// 上游状态透传给前端，让它能按状态区分限流 / 上游故障；但上游的 401 不能原样透传，
+// 前端把自家 /api 的 401 当成会话失效会直接登出，而这里失效的是网关密钥不是用户会话。
+func proxyFailureStatus(upstreamStatus int) int {
+	if upstreamStatus == http.StatusUnauthorized {
+		return http.StatusBadGateway
+	}
+	return upstreamStatus
 }
 
 func selectAIChannel(userID string, modelName string) (model.ModelChannel, string, bool, error) {
@@ -809,6 +820,26 @@ func friendlyUpstreamError(code string, message string) string {
 	lowerCode := strings.ToLower(strings.TrimSpace(code))
 	if strings.Contains(lowerCode, "inputvideosensitivecontentdetected") || strings.Contains(lowerCode, "privacyinformation") {
 		return strings.TrimSpace(code + " 参考视频疑似包含真人或隐私信息，火山方舟拒绝使用普通 URL 作为真人视频参考；请改用不含真人的视频、官方允许的模型产物，或已授权的 asset:// 素材。原始错误：" + message)
+	}
+	if hint := upstreamCodeHint(lowerCode); hint != "" {
+		return strings.TrimSpace(hint + "原始错误：" + code + " " + message)
+	}
+	return ""
+}
+
+// 网关只回错误码不回人话，这里把常见的几个翻译成可操作的提示，原始错误仍然附在后面。
+func upstreamCodeHint(lowerCode string) string {
+	switch lowerCode {
+	case "bad_response_status_code":
+		return "网关调用上游模型时收到异常状态码，通常是上游过载或故障，请稍后重试。"
+	case "empty_response":
+		return "上游返回了结果但没有可用的图片或视频，可能是格式不符或内容被拦截，请重试或换个模型。"
+	case "fail_to_fetch_task":
+		return "任务已提交但网关拉不回结果，通常是上游生成超时，请稍后重试。"
+	case "moderation_error":
+		return "内容审核未通过，请调整提示词或参考图；提示词里的负面约束词也会被审核扫到。"
+	case "do_request_failed":
+		return "网关请求上游失败，请检查参考素材地址是否为可公网访问的 http/https 链接。"
 	}
 	return ""
 }
