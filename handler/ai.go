@@ -14,10 +14,18 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/basketikun/infinite-canvas/model"
 	"github.com/basketikun/infinite-canvas/service"
 )
+
+// 网关自己在 10 分钟返 504，这里留出余量让它的具体错误先到；这个上限只兜底
+// 网关完全不响应的情况，客户端提前离开靠请求上下文取消来收尾。
+const aiUpstreamTimeout = 11 * time.Minute
+
+// http.DefaultClient 没有超时，网关卡住时会把 goroutine 和连接一直占着。
+var aiUpstreamClient = &http.Client{Timeout: aiUpstreamTimeout}
 
 func AIImagesGenerations(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/images/generations")
@@ -76,7 +84,7 @@ func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 		return
 	}
 	path = resolveAIProxyPath(channel.BaseURL, resolvedModelName, path)
-	request, err := http.NewRequest(http.MethodGet, service.BuildModelChannelURL(channel, path), nil)
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, service.BuildModelChannelURL(channel, path), nil)
 	if err != nil {
 		Fail(w, "AI 接口请求失败")
 		return
@@ -126,7 +134,8 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		Fail(w, "AI 接口请求失败")
 		return
 	}
-	request, err := http.NewRequest(http.MethodPost, service.BuildModelChannelURL(channel, proxyPath), bytes.NewReader(body))
+	// 带上客户端的请求上下文：客户端断开时立刻放弃上游调用，不再空等到网关超时。
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodPost, service.BuildModelChannelURL(channel, proxyPath), bytes.NewReader(body))
 	if err != nil {
 		log.Printf("AI proxy build request failed: url=%s err=%v", service.BuildModelChannelURL(channel, proxyPath), err)
 		Fail(w, "AI 接口请求失败")
@@ -149,7 +158,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 }
 
 func copyAIResponse(w http.ResponseWriter, request *http.Request, modelName string, path string, onFailure func()) {
-	response, err := http.DefaultClient.Do(request)
+	response, err := aiUpstreamClient.Do(request)
 	if err != nil {
 		log.Printf("AI proxy request failed: url=%s path=%s model=%s err=%v", request.URL.String(), path, modelName, err)
 		if onFailure != nil {
