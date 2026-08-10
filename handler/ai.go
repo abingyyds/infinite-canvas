@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/basketikun/infinite-canvas/config"
 	"github.com/basketikun/infinite-canvas/model"
 	"github.com/basketikun/infinite-canvas/service"
 )
@@ -188,7 +190,56 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, modelName stri
 		}
 	}
 	w.WriteHeader(response.StatusCode)
-	_, _ = io.Copy(w, response.Body)
+	_, _ = io.Copy(w, publicMediaBody(response, request.URL))
+}
+
+// URL 型响应只有几百字节；b64 型响应可以到几十 MB，但里面没有地址可改，超过上限就原样透传。
+const mediaRewriteLimit = 1 << 20
+
+// 网关按收到的 Host 生成图片/视频代理地址。我们走 Railway 私网调用它，返回的
+// *.railway.internal 地址浏览器解析不了，这里换回公网域名。
+func publicMediaBody(response *http.Response, upstream *url.URL) io.Reader {
+	internal := internalUpstreamOrigin(upstream)
+	public := publicGatewayOrigin()
+	if internal == "" || public == "" || internal == public {
+		return response.Body
+	}
+	if !strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "json") {
+		return response.Body
+	}
+	head := make([]byte, mediaRewriteLimit)
+	read, err := io.ReadFull(response.Body, head)
+	head = head[:read]
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return io.MultiReader(bytes.NewReader(head), response.Body)
+	}
+	return bytes.NewReader(replaceOrigin(head, internal, public))
+}
+
+func replaceOrigin(body []byte, internal string, public string) []byte {
+	return bytes.ReplaceAll(body, []byte(internal), []byte(public))
+}
+
+// 只改内网地址：网关本来就返回公网地址时不能碰。
+func internalUpstreamOrigin(upstream *url.URL) string {
+	if upstream == nil || !strings.HasSuffix(strings.ToLower(upstream.Hostname()), ".railway.internal") {
+		return ""
+	}
+	return upstream.Scheme + "://" + upstream.Host
+}
+
+func publicGatewayOrigin() string {
+	for _, candidate := range []string{config.Cfg.GatewayMediaBaseURL, config.Cfg.GatewayBaseURL} {
+		parsed, err := url.Parse(strings.TrimSpace(candidate))
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(parsed.Hostname()), ".railway.internal") {
+			continue
+		}
+		return parsed.Scheme + "://" + parsed.Host
+	}
+	return ""
 }
 
 func readAIRequest(r *http.Request) ([]byte, string, string, error) {

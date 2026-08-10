@@ -28,6 +28,7 @@ type Config struct {
 	GatewayBaseURL              string `env:"GATEWAY_BASE_URL"`
 	GatewayLoginSources         string `env:"GATEWAY_LOGIN_SOURCES"`
 	GatewayPublicBaseURL        string `env:"GATEWAY_PUBLIC_BASE_URL"`
+	GatewayMediaBaseURL         string `env:"GATEWAY_MEDIA_BASE_URL"`
 	GatewayFallbackBaseURL      string `env:"GATEWAY_FALLBACK_BASE_URL"`
 	GatewayBaseURLCandidates    string `env:"GATEWAY_BASE_URL_CANDIDATES"`
 	GatewaySubscribedModelsPath string `env:"GATEWAY_SUBSCRIBED_MODELS_PATH"`
