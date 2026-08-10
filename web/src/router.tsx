@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate, Outlet } from "react-router-dom";
 
 import { AnalyticsTracker } from "@/components/layout/analytics-tracker";
 import { SessionInit } from "@/components/layout/session-init";
+import { SyncErrorBanner } from "@/components/layout/sync-error-banner";
 import UserLayout from "@/layouts/user-layout";
 import AdminLayout from "@/pages/admin/layout";
 import AdminAssetsPage from "@/pages/admin/assets";
@@ -25,6 +26,7 @@ export const router = createBrowserRouter([
         element: (
             <>
                 <SessionInit />
+                <SyncErrorBanner />
                 <Outlet />
             </>
         ),

@@ -63,6 +63,8 @@ func New() *gin.Engine {
 	api.POST("/user-data/:domain", middleware.UserAuth, func(c *gin.Context) {
 		handler.SaveUserDataSnapshot(c.Writer, c.Request, c.Param("domain"))
 	})
+	// 独立路径而非 /user-data/canvas/projects：后者和 :domain 通配在同一段上冲突。
+	api.POST("/canvas/projects", middleware.UserAuth, gin.WrapF(handler.SaveUserCanvasProjects))
 
 	admin := api.Group("/admin", middleware.AdminAuth)
 	admin.GET("/users", gin.WrapF(handler.AdminUsers))

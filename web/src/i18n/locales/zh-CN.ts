@@ -27,6 +27,8 @@ export default {
         durationMinutes: "{{minutes}}分{{seconds}}秒",
         durationSeconds: "{{seconds}}秒",
         imageReadFailed: "读取图片失败",
+        syncFailed: "云端同步失败，本次改动只保存在本机：{{message}}",
+        dismiss: "关闭",
     },
     settingsPanels: {
         common: { auto: "自动", low: "低", medium: "中", high: "高", xhigh: "极高" },

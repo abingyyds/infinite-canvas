@@ -27,6 +27,8 @@ export default {
         durationMinutes: "{{minutes}}m {{seconds}}s",
         durationSeconds: "{{seconds}}s",
         imageReadFailed: "Failed to read image",
+        syncFailed: "Cloud sync failed, this change is saved on this device only: {{message}}",
+        dismiss: "Dismiss",
     },
     settingsPanels: {
         common: { auto: "Auto", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high" },

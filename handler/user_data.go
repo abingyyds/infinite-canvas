@@ -43,3 +43,22 @@ func SaveUserDataSnapshot(w http.ResponseWriter, r *http.Request, domain string)
 	}
 	OK(w, result)
 }
+
+func SaveUserCanvasProjects(w http.ResponseWriter, r *http.Request) {
+	user, ok := service.UserFromContext(r.Context())
+	if !ok {
+		FailStatus(w, http.StatusUnauthorized, "未登录")
+		return
+	}
+	var patch service.CanvasProjectsPatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		Fail(w, "参数错误")
+		return
+	}
+	result, err := service.SaveUserCanvasProjects(user, patch)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
