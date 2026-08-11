@@ -18,6 +18,7 @@ import (
 	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 // 远程提示词源已由前端 registry（yukkcat/image-prompts）接管，站内库只保留后台手动维护的内容。
@@ -54,7 +55,9 @@ func DB() (*gorm.DB, error) {
 				return
 			}
 		}
-		db, dbErr = gorm.Open(dialector(driver, dsn), &gorm.Config{})
+		// 默认的 Info 级别会把每条 SQL 连同参数打进日志，画布快照同步一次就是几十 KB，
+		// 会把应用自己的日志冲掉；Warn 保留慢查询和错误。
+		db, dbErr = gorm.Open(dialector(driver, dsn), &gorm.Config{Logger: gormlogger.Default.LogMode(gormlogger.Warn)})
 		if dbErr != nil {
 			return
 		}
