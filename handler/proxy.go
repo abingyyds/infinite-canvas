@@ -36,7 +36,8 @@ func VideoContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.Header.Set("Authorization", "Bearer "+apiKey)
-	response, err := http.DefaultClient.Do(request)
+	// 复用 AI 代理那个带超时的 client：http.DefaultClient 没有超时，渠道卡住时会一直占着连接。
+	response, err := aiUpstreamClient.Do(request)
 	if err != nil {
 		FailStatus(w, http.StatusBadGateway, "视频下载失败，请稍后重试")
 		return
