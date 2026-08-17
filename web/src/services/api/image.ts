@@ -78,6 +78,12 @@ type ImageApiResponse = {
     code?: number;
     msg?: string;
 };
+type ChatImagePayload = {
+    choices?: Array<{ message?: { content?: string; images?: Array<{ image_url?: { url?: string }; url?: string } | string> } }>;
+    error?: { message?: string };
+    code?: number;
+    msg?: string;
+};
 type GeminiPart = {
     text?: string;
     inlineData?: { mimeType?: string; data?: string };
@@ -752,6 +758,46 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
     return images;
 }
 
+/** Gemini 系画图模型在 OpenAI 兼容网关上只能走 /chat/completions，images 端点会被上游拒（only imagen models are supported）。 */
+export function isChatCompletionImageModel(model: string) {
+    const name = model.toLowerCase();
+    return name.includes("nano-banana") || (name.includes("gemini") && name.includes("image"));
+}
+
+const MARKDOWN_IMAGE_URL = /!\[[^\]]*\]\(\s*([^)\s]+)/g;
+
+export function parseChatImagePayload(payload: ChatImagePayload) {
+    if (typeof payload.code === "number" && payload.code !== 0) throw new Error(payload.msg || apiText("requestFailed"));
+    if (payload.error?.message) throw new Error(payload.error.message);
+    const message = payload.choices?.[0]?.message || {};
+    const content = typeof message.content === "string" ? message.content : "";
+    const urls = [
+        ...(message.images || []).map((item) => (typeof item === "string" ? item : item.image_url?.url || item.url || "")),
+        ...Array.from(content.matchAll(MARKDOWN_IMAGE_URL), (match) => match[1]),
+    ].filter((url) => Boolean(url));
+    // 没出图时正文里通常是模型自己的拒绝理由，比通用文案有用
+    if (!urls.length) throw new Error(content.trim().slice(0, 300) || apiText("noImageReturned"));
+    return [...new Set(urls)];
+}
+
+async function requestChatImagesOnce(config: AiConfig, prompt: string, references: string[], options?: RequestOptions) {
+    const content: AiTextMessage["content"] = references.length
+        ? [{ type: "text" as const, text: prompt }, ...references.map((url) => ({ type: "image_url" as const, image_url: { url } }))]
+        : prompt;
+    const response = await axios.post<ChatImagePayload>(
+        aiApiUrl(config, "/chat/completions"),
+        { model: config.model, messages: [{ role: "user", content }], stream: false },
+        { headers: aiHeaders(config, "application/json"), signal: options?.signal },
+    );
+    return parseChatImagePayload(response.data).map((dataUrl) => ({ id: nanoid(), dataUrl }));
+}
+
+async function requestChatImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, options?: RequestOptions) {
+    const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
+    const requests = Array.from({ length: count }, () => requestChatImagesOnce(config, prompt, refs, options));
+    return (await Promise.all(requests)).flat();
+}
+
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
@@ -779,6 +825,15 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     if (requestConfig.apiFormat === "gemini") {
         try {
             return await requestGeminiImages(requestConfig, prompt, [], n, options);
+        } catch (error) {
+            throw new Error(readAxiosError(error, apiText("requestFailed")));
+        }
+    }
+    if (isChatCompletionImageModel(requestConfig.model)) {
+        try {
+            const images = await requestChatImages(requestConfig, withSystemPrompt(requestConfig, prompt), [], n, options);
+            refreshGatewayUser(config, config.model || config.imageModel);
+            return images;
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
@@ -875,6 +930,17 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                 },
             );
             return parseImagePayload(response.data);
+        } catch (error) {
+            throw new Error(readAxiosError(error, apiText("requestFailed")));
+        }
+    }
+
+    if (isChatCompletionImageModel(requestConfig.model)) {
+        if (mask) throw new Error(apiText("maskModelUnsupported"));
+        try {
+            const images = await requestChatImages(requestConfig, withSystemPrompt(requestConfig, requestPrompt), references, n, options);
+            refreshGatewayUser(config, config.model || config.imageModel);
+            return images;
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
