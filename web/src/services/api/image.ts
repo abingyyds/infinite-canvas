@@ -135,6 +135,11 @@ export function supportsImageFormatParams(model: string) {
     return !model.toLowerCase().includes("gpt-image");
 }
 
+/** gpt-image-2-4k 把 resolution 当视频参数，出图档位要走 output_resolution。 */
+export function imageResolutionField(model: string) {
+    return model.toLowerCase().includes("gpt-image-2-4k") ? "output_resolution" : "resolution";
+}
+
 /** 走内置网关时后端会扣算力点，出图后刷新余额。 */
 function refreshGatewayUser(config: AiConfig, model: string) {
     if (isGatewayModel(config, model)) void useUserStore.getState().hydrateUser();
@@ -850,7 +855,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 prompt: withSystemPrompt(requestConfig, prompt),
                 n,
                 ...(quality ? { quality } : {}),
-                ...(resolution ? { resolution } : {}),
+                ...(resolution ? { [imageResolutionField(requestConfig.model)]: resolution } : {}),
                 ...(requestSize ? { size: requestSize } : {}),
                 ...(background ? { background } : {}),
                 ...(supportsImageFormatParams(requestConfig.model) ? { response_format: "b64_json", output_format: IMAGE_OUTPUT_FORMAT } : {}),
@@ -962,7 +967,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         formData.set("quality", quality);
     }
     if (resolution) {
-        formData.set("resolution", resolution);
+        formData.set(imageResolutionField(requestConfig.model), resolution);
     }
     if (requestSize) {
         formData.set("size", requestSize);
@@ -1031,7 +1036,7 @@ async function requestEditJsonFallback(
                 images,
                 ...(mask ? { mask } : {}),
                 ...(params.quality ? { quality: params.quality } : {}),
-                ...(params.resolution ? { resolution: params.resolution } : {}),
+                ...(params.resolution ? { [imageResolutionField(config.model)]: params.resolution } : {}),
                 ...(params.size ? { size: params.size } : {}),
                 ...(params.background ? { background: params.background } : {}),
                 ...(supportsImageFormatParams(config.model) ? { output_format: IMAGE_OUTPUT_FORMAT } : {}),

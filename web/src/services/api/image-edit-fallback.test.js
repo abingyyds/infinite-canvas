@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { shouldRetryImageEditAsJson, supportsImageFormatParams } from "./image";
+import { imageResolutionField, shouldRetryImageEditAsJson, supportsImageFormatParams } from "./image";
 
 describe("image edit JSON fallback trigger", () => {
     it("retries on gateway upload rejections", () => {
@@ -31,5 +31,17 @@ describe("image format params", () => {
     it("keeps them for models that do accept them", () => {
         expect(supportsImageFormatParams("dall-e-3")).toBe(true);
         expect(supportsImageFormatParams("seedream-4-0")).toBe(true);
+    });
+});
+
+describe("resolution field name", () => {
+    it("uses output_resolution for gpt-image-2-4k, which treats resolution as video-only", () => {
+        expect(imageResolutionField("gpt-image-2-4k")).toBe("output_resolution");
+        expect(imageResolutionField("gpt-image-2-4K")).toBe("output_resolution");
+    });
+
+    it("keeps resolution everywhere else", () => {
+        expect(imageResolutionField("gpt-image-2")).toBe("resolution");
+        expect(imageResolutionField("seedream-4-0")).toBe("resolution");
     });
 });
