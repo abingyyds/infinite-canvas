@@ -135,9 +135,9 @@ export function supportsImageFormatParams(model: string) {
     return !model.toLowerCase().includes("gpt-image");
 }
 
-/** gpt-image-2-4k 把 resolution 当视频参数，出图档位要走 output_resolution。 */
-export function imageResolutionField(model: string) {
-    return model.toLowerCase().includes("gpt-image-2-4k") ? "output_resolution" : "resolution";
+/** gpt-image-2-4k 把 resolution 当视频参数直接判 400，它的出图尺寸只认 OpenAI 规范的 size。 */
+export function supportsResolutionParam(model: string) {
+    return !model.toLowerCase().includes("gpt-image-2-4k");
 }
 
 /** 走内置网关时后端会扣算力点，出图后刷新余额。 */
@@ -855,7 +855,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 prompt: withSystemPrompt(requestConfig, prompt),
                 n,
                 ...(quality ? { quality } : {}),
-                ...(resolution ? { [imageResolutionField(requestConfig.model)]: resolution } : {}),
+                ...(resolution && supportsResolutionParam(requestConfig.model) ? { resolution } : {}),
                 ...(requestSize ? { size: requestSize } : {}),
                 ...(background ? { background } : {}),
                 ...(supportsImageFormatParams(requestConfig.model) ? { response_format: "b64_json", output_format: IMAGE_OUTPUT_FORMAT } : {}),
@@ -966,8 +966,8 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (quality) {
         formData.set("quality", quality);
     }
-    if (resolution) {
-        formData.set(imageResolutionField(requestConfig.model), resolution);
+    if (resolution && supportsResolutionParam(requestConfig.model)) {
+        formData.set("resolution", resolution);
     }
     if (requestSize) {
         formData.set("size", requestSize);
@@ -1036,7 +1036,7 @@ async function requestEditJsonFallback(
                 images,
                 ...(mask ? { mask } : {}),
                 ...(params.quality ? { quality: params.quality } : {}),
-                ...(params.resolution ? { [imageResolutionField(config.model)]: params.resolution } : {}),
+                ...(params.resolution && supportsResolutionParam(config.model) ? { resolution: params.resolution } : {}),
                 ...(params.size ? { size: params.size } : {}),
                 ...(params.background ? { background: params.background } : {}),
                 ...(supportsImageFormatParams(config.model) ? { output_format: IMAGE_OUTPUT_FORMAT } : {}),

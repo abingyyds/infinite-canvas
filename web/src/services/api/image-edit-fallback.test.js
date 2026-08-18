@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { imageResolutionField, shouldRetryImageEditAsJson, supportsImageFormatParams } from "./image";
+import { shouldRetryImageEditAsJson, supportsImageFormatParams, supportsResolutionParam } from "./image";
 
 describe("image edit JSON fallback trigger", () => {
     it("retries on gateway upload rejections", () => {
@@ -34,14 +34,15 @@ describe("image format params", () => {
     });
 });
 
-describe("resolution field name", () => {
-    it("uses output_resolution for gpt-image-2-4k, which treats resolution as video-only", () => {
-        expect(imageResolutionField("gpt-image-2-4k")).toBe("output_resolution");
-        expect(imageResolutionField("gpt-image-2-4K")).toBe("output_resolution");
+describe("resolution param", () => {
+    // size 已经带着像素尺寸，resolution 只会让 gpt-image-2-4k 判 400
+    it("is dropped for gpt-image-2-4k", () => {
+        expect(supportsResolutionParam("gpt-image-2-4k")).toBe(false);
+        expect(supportsResolutionParam("gpt-image-2-4K")).toBe(false);
     });
 
-    it("keeps resolution everywhere else", () => {
-        expect(imageResolutionField("gpt-image-2")).toBe("resolution");
-        expect(imageResolutionField("seedream-4-0")).toBe("resolution");
+    it("is kept everywhere else", () => {
+        expect(supportsResolutionParam("gpt-image-2")).toBe(true);
+        expect(supportsResolutionParam("seedream-4-0")).toBe(true);
     });
 });
