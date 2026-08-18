@@ -79,7 +79,7 @@ func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 		modelName = "grok-imagine-video"
 	}
 	user, _ := service.UserFromContext(r.Context())
-	channel, resolvedModelName, _, err := selectAIChannel(user.ID, modelName)
+	channel, resolvedModelName, isGatewayChannel, err := selectAIChannel(user.ID, modelName)
 	if err != nil {
 		log.Printf("AI proxy select channel failed: model=%s err=%v", modelName, err)
 		Fail(w, "AI 接口请求失败")
@@ -92,7 +92,7 @@ func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 		return
 	}
 	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
-	copyAIResponse(w, request, resolvedModelName, path, nil)
+	copyAIResponse(w, request, resolvedModelName, path, nil, refreshGatewayKeyRetry(request, user.ID, channel.APIKey, isGatewayChannel))
 }
 
 func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
@@ -156,10 +156,43 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		if err := service.RefundUserCredits(user.ID, resolvedModelName, credits, proxyPath); err != nil {
 			log.Printf("AI proxy refund credits failed: user=%s model=%s credits=%d err=%v", user.ID, resolvedModelName, credits, err)
 		}
-	})
+	}, refreshGatewayKeyRetry(request, user.ID, channel.APIKey, isGatewayChannel))
 }
 
-func copyAIResponse(w http.ResponseWriter, request *http.Request, modelName string, path string, onFailure func()) {
+// 网关账号的访问密钥在网关侧被删掉后会一直 401，这里重签一次并原样重发；重发不再重试。
+func refreshGatewayKeyRetry(request *http.Request, userID string, staleKey string, isGatewayChannel bool) func() (*http.Request, bool) {
+	if !isGatewayChannel {
+		return nil
+	}
+	return func() (*http.Request, bool) {
+		apiKey, err := service.RefreshUserGatewayKey(userID, staleKey)
+		if err != nil {
+			log.Printf("AI proxy refresh gateway key failed: user=%s err=%v", userID, err)
+			return nil, false
+		}
+		if apiKey == "" {
+			return nil, false
+		}
+		return retryRequestWithKey(request, apiKey)
+	}
+}
+
+// 上游已经读完并关闭了原来的 body，重发要用 GetBody 重新拿一份。
+func retryRequestWithKey(request *http.Request, apiKey string) (*http.Request, bool) {
+	retry := request.Clone(request.Context())
+	if request.GetBody != nil {
+		body, err := request.GetBody()
+		if err != nil {
+			log.Printf("AI proxy rebuild request body failed: url=%s err=%v", request.URL.String(), err)
+			return nil, false
+		}
+		retry.Body = body
+	}
+	retry.Header.Set("Authorization", "Bearer "+apiKey)
+	return retry, true
+}
+
+func copyAIResponse(w http.ResponseWriter, request *http.Request, modelName string, path string, onFailure func(), retry func() (*http.Request, bool)) {
 	response, err := aiUpstreamClient.Do(request)
 	if err != nil {
 		log.Printf("AI proxy request failed: url=%s path=%s model=%s err=%v", request.URL.String(), path, modelName, err)
@@ -170,6 +203,14 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, modelName stri
 		return
 	}
 	defer response.Body.Close()
+
+	if response.StatusCode == http.StatusUnauthorized && retry != nil {
+		if next, ok := retry(); ok {
+			log.Printf("AI proxy retrying with a refreshed gateway key: path=%s model=%s", path, modelName)
+			copyAIResponse(w, next, modelName, path, onFailure, nil)
+			return
+		}
+	}
 
 	if response.StatusCode >= http.StatusBadRequest {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/basketikun/infinite-canvas/config"
@@ -204,6 +205,39 @@ func UserGatewayChannel(userID string, modelName string) (model.ModelChannel, bo
 		Weight:   1,
 		Enabled:  true,
 	}, true, nil
+}
+
+var gatewayKeyRefreshLock sync.Mutex
+
+// 网关侧的访问密钥只在登录时签发一次，被删掉后该用户的所有调用会一直 401。
+// 上游鉴权失败时重签一次；返回空字符串表示没拿到新密钥，调用方不必重试。
+// ponytail: 全局锁，重签是极冷路径；真出现并发瓶颈再拆成按用户加锁
+func RefreshUserGatewayKey(userID string, staleKey string) (string, error) {
+	gatewayKeyRefreshLock.Lock()
+	defer gatewayKeyRefreshLock.Unlock()
+	account, ok, err := repository.FirstGatewayAccountByUser(userID)
+	if err != nil || !ok {
+		return "", err
+	}
+	// 并发的失败请求里已经有一个重签过了
+	if account.APIKey != staleKey {
+		return account.APIKey, nil
+	}
+	key, err := ensureGatewayKey(account)
+	if err != nil {
+		return "", err
+	}
+	// 网关那边还是同一把密钥，说明 401 不是密钥丢失引起的
+	if key.Key == "" || key.Key == staleKey {
+		return "", nil
+	}
+	account.APIKey = key.Key
+	account.APIKeyID = key.ID
+	account.UpdatedAt = now()
+	if _, err := repository.SaveGatewayAccount(account); err != nil {
+		return "", err
+	}
+	return key.Key, nil
 }
 
 func PublicSettingsWithGateway(user model.AuthUser) (model.PublicSetting, error) {
