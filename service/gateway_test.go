@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -94,6 +95,66 @@ func TestResolveGatewaySiteHostUsesGatewayBaseURLSuffix(t *testing.T) {
 	want := "studio.subrouter.example.com"
 	if got != want {
 		t.Fatalf("site host = %q, want %q", got, want)
+	}
+}
+
+func TestLoginMainGatewayCompletesTwoFactorAndMergesCookies(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/user/login":
+			if got := r.URL.Query().Get("turnstile"); got != "captcha token" {
+				t.Fatalf("turnstile = %q, want captcha token", got)
+			}
+			w.Header().Add("Set-Cookie", "session=pending; Path=/; HttpOnly")
+			w.Header().Add("Set-Cookie", "device=known; Path=/")
+			_, _ = w.Write([]byte(`{"success":true,"data":{"require_2fa":true,"id":42,"username":"alice"}}`))
+		case "/api/user/login/2fa":
+			if got := r.Header.Get("Cookie"); got != "session=pending; device=known" {
+				t.Fatalf("verification cookie = %q", got)
+			}
+			w.Header().Set("Set-Cookie", "session=verified; Path=/; HttpOnly")
+			_, _ = w.Write([]byte(`{"success":true,"data":{"verified":true}}`))
+		case "/api/user/self/distributor":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"belongs_to_distributor":false}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldClient := gatewayHTTPClient
+	t.Cleanup(func() { gatewayHTTPClient = oldClient })
+	gatewayHTTPClient = server.Client()
+
+	result, err := loginMainGateway(server.URL, "", "alice", "password", "captcha token", "123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExternalUserID != "42" || result.Username != "alice" {
+		t.Fatalf("user = %#v", result)
+	}
+	if result.SessionCookie != "session=verified; device=known" {
+		t.Fatalf("session cookie = %q", result.SessionCookie)
+	}
+}
+
+func TestLoginMainGatewayRequiresTwoFactorCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Set-Cookie", "session=pending; Path=/; HttpOnly")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"require_2fa":true}}`))
+	}))
+	defer server.Close()
+
+	oldClient := gatewayHTTPClient
+	t.Cleanup(func() { gatewayHTTPClient = oldClient })
+	gatewayHTTPClient = server.Client()
+
+	_, err := loginMainGateway(server.URL, "", "alice", "password", "", "")
+	var twoFactorErr gatewayTwoFactorError
+	if !errors.As(err, &twoFactorErr) || twoFactorErr.Code() != "TWO_FACTOR_REQUIRED" {
+		t.Fatalf("error = %#v", err)
 	}
 }
 

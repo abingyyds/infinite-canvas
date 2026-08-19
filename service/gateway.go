@@ -25,11 +25,13 @@ type GatewayLoginSource struct {
 }
 
 type GatewayLoginRequest struct {
-	Provider model.GatewayProvider `json:"provider"`
-	BaseURL  string                `json:"baseUrl"`
-	Username string                `json:"username"`
-	Password string                `json:"password"`
-	SiteHost string                `json:"siteHost"`
+	Provider       model.GatewayProvider `json:"provider"`
+	BaseURL        string                `json:"baseUrl"`
+	Username       string                `json:"username"`
+	Password       string                `json:"password"`
+	SiteHost       string                `json:"siteHost"`
+	TurnstileToken string                `json:"turnstileToken"`
+	TwoFactorCode  string                `json:"twoFactorCode"`
 }
 
 type GatewayStatus struct {
@@ -56,16 +58,16 @@ type GatewayLoginSession struct {
 }
 
 type gatewayLoginResult struct {
-	Provider       model.GatewayProvider
-	BaseURL        string
-	ExternalUserID string
-	Username       string
-	Email          string
-	DisplayName    string
-	DistributorID  string
+	Provider        model.GatewayProvider
+	BaseURL         string
+	ExternalUserID  string
+	Username        string
+	Email           string
+	DisplayName     string
+	DistributorID   string
 	DistributorSlug string
-	SiteHost       string
-	SessionCookie  string
+	SiteHost        string
+	SessionCookie   string
 }
 
 type gatewayDistributorInfo struct {
@@ -79,6 +81,15 @@ type gatewayKey struct {
 	Key string
 	ID  string
 }
+
+type gatewayTwoFactorError struct {
+	message string
+	code    string
+}
+
+func (err gatewayTwoFactorError) Error() string       { return err.message }
+func (err gatewayTwoFactorError) SafeMessage() string { return err.message }
+func (err gatewayTwoFactorError) Code() string        { return err.code }
 
 type gatewayFetchResult struct {
 	Models []string
@@ -104,9 +115,12 @@ func LoginWithGateway(request GatewayLoginRequest) (GatewayLoginSession, error) 
 	}
 	var lastErr error
 	for _, source := range sources {
-		result, err := loginGatewaySource(source, request.Username, request.Password)
+		result, err := loginGatewaySource(source, request.Username, request.Password, request.TurnstileToken, request.TwoFactorCode)
 		if err != nil {
 			lastErr = err
+			if isGatewayTwoFactorError(err) {
+				break
+			}
 			continue
 		}
 		session, account, models, notice, err := prepareGatewayLogin(result)
@@ -126,7 +140,7 @@ func LoginWithGateway(request GatewayLoginRequest) (GatewayLoginSession, error) 
 	return GatewayLoginSession{}, safeMessageError{message: "网关登录失败"}
 }
 
-func LoginWithDefaultGateway(username string, password string) (GatewayLoginSession, bool, error) {
+func LoginWithDefaultGateway(username string, password string, turnstileToken string, twoFactorCode string) (GatewayLoginSession, bool, error) {
 	if !config.Cfg.GatewayAllowLoginFallback {
 		return GatewayLoginSession{}, false, nil
 	}
@@ -136,9 +150,12 @@ func LoginWithDefaultGateway(username string, password string) (GatewayLoginSess
 	}
 	var lastErr error
 	for _, source := range sources {
-		result, err := loginGatewaySource(source, username, password)
+		result, err := loginGatewaySource(source, username, password, turnstileToken, twoFactorCode)
 		if err != nil {
 			lastErr = err
+			if isGatewayTwoFactorError(err) {
+				break
+			}
 			continue
 		}
 		session, account, models, notice, err := prepareGatewayLogin(result)
@@ -275,20 +292,24 @@ func DefaultGatewayLoginSources() []GatewayLoginSource {
 	return normalizeGatewaySources(raw)
 }
 
-func loginGatewaySource(source GatewayLoginSource, username string, password string) (gatewayLoginResult, error) {
+func loginGatewaySource(source GatewayLoginSource, username string, password string, turnstileToken string, twoFactorCode string) (gatewayLoginResult, error) {
 	source.BaseURL = normalizeBaseURL(source.BaseURL)
 	if source.Provider == "" || source.BaseURL == "" {
 		return gatewayLoginResult{}, safeMessageError{message: "网关登录源未配置"}
 	}
 	if source.Provider == model.GatewayProviderSite {
-		return loginSiteGateway(source.BaseURL, source.SiteHost, username, password)
+		return loginSiteGateway(source.BaseURL, source.SiteHost, username, password, turnstileToken, twoFactorCode)
 	}
-	return loginMainGateway(source.BaseURL, source.SiteHost, username, password)
+	return loginMainGateway(source.BaseURL, source.SiteHost, username, password, turnstileToken, twoFactorCode)
 }
 
-func loginMainGateway(baseURL string, siteHost string, username string, password string) (gatewayLoginResult, error) {
+func loginMainGateway(baseURL string, siteHost string, username string, password string, turnstileToken string, twoFactorCode string) (gatewayLoginResult, error) {
 	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
-	response, err := gatewayJSON(http.MethodPost, apiBaseURL(baseURL)+"/api/user/login", nil, body)
+	loginURL := apiBaseURL(baseURL) + "/api/user/login"
+	if strings.TrimSpace(turnstileToken) != "" {
+		loginURL += "?turnstile=" + url.QueryEscape(strings.TrimSpace(turnstileToken))
+	}
+	response, err := gatewayJSON(http.MethodPost, loginURL, nil, body)
 	if err != nil {
 		return gatewayLoginResult{}, err
 	}
@@ -305,6 +326,36 @@ func loginMainGateway(baseURL string, siteHost string, username string, password
 		return gatewayLoginResult{}, safeMessageError{message: gatewayMessage(payload, "网关登录失败")}
 	}
 	user := extractGatewayUser(payload)
+	sessionCookie := cookie
+	data := extractGatewayData(payload)
+	requiresTwoFactor := anyBool(data["require_2fa"]) || anyBool(data["require2fa"]) || anyBool(payload["require_2fa"]) || anyBool(payload["require2fa"])
+	if requiresTwoFactor {
+		if strings.TrimSpace(twoFactorCode) == "" {
+			return gatewayLoginResult{}, gatewayTwoFactorError{message: "该 SubRouter 账号启用了双重验证，请输入验证码后继续", code: "TWO_FACTOR_REQUIRED"}
+		}
+		if sessionCookie == "" {
+			return gatewayLoginResult{}, gatewayTwoFactorError{message: "双重验证会话已失效，请重新登录", code: "TWO_FACTOR_SESSION_EXPIRED"}
+		}
+		verification, verifyErr := gatewayJSON(http.MethodPost, apiBaseURL(baseURL)+"/api/user/login/2fa", map[string]string{"Cookie": sessionCookie}, mustJSON(map[string]string{"code": strings.TrimSpace(twoFactorCode)}))
+		if verifyErr != nil {
+			return gatewayLoginResult{}, gatewayTwoFactorError{message: verifyErr.Error(), code: "TWO_FACTOR_INVALID"}
+		}
+		defer verification.Body.Close()
+		verificationCookie := buildGatewayCookie(verification.Header.Values("Set-Cookie"))
+		var verificationPayload map[string]any
+		if err := json.NewDecoder(verification.Body).Decode(&verificationPayload); err != nil {
+			return gatewayLoginResult{}, gatewayTwoFactorError{message: "双重验证码响应异常", code: "TWO_FACTOR_INVALID"}
+		}
+		if isGatewayFalse(verificationPayload) {
+			return gatewayLoginResult{}, gatewayTwoFactorError{message: gatewayMessage(verificationPayload, "双重验证码错误"), code: "TWO_FACTOR_INVALID"}
+		}
+		sessionCookie = mergeGatewayCookies(sessionCookie, verificationCookie)
+		payload = verificationPayload
+		verifiedUser := extractGatewayUser(payload)
+		if gatewayUserHasIdentity(verifiedUser) {
+			user = verifiedUser
+		}
+	}
 	externalID := anyString(user["id"])
 	if externalID == "" {
 		externalID = username
@@ -316,7 +367,7 @@ func loginMainGateway(baseURL string, siteHost string, username string, password
 		Username:       firstNonEmpty(anyString(user["username"]), username),
 		Email:          anyString(user["email"]),
 		DisplayName:    firstNonEmpty(anyString(user["display_name"]), anyString(user["displayName"]), anyString(user["username"]), username),
-		SessionCookie:  cookie,
+		SessionCookie:  sessionCookie,
 	}
 	if info, ok := fetchGatewayDistributorInfo(result); ok && info.Belongs {
 		result.Provider = model.GatewayProviderSite
@@ -327,10 +378,14 @@ func loginMainGateway(baseURL string, siteHost string, username string, password
 	return result, nil
 }
 
-func loginSiteGateway(baseURL string, siteHost string, username string, password string) (gatewayLoginResult, error) {
+func loginSiteGateway(baseURL string, siteHost string, username string, password string, turnstileToken string, twoFactorCode string) (gatewayLoginResult, error) {
 	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
 	siteHost = resolveGatewaySiteHost(gatewayDistributorInfo{}, siteHost, baseURL)
-	response, err := gatewayJSON(http.MethodPost, apiBaseURL(baseURL)+"/api/dist/user/login", gatewaySiteHeaders(siteHost), body)
+	loginURL := apiBaseURL(baseURL) + "/api/dist/user/login"
+	if strings.TrimSpace(turnstileToken) != "" {
+		loginURL += "?turnstile=" + url.QueryEscape(strings.TrimSpace(turnstileToken))
+	}
+	response, err := gatewayJSON(http.MethodPost, loginURL, gatewaySiteHeaders(siteHost), body)
 	if err != nil {
 		return gatewayLoginResult{}, err
 	}
@@ -347,6 +402,36 @@ func loginSiteGateway(baseURL string, siteHost string, username string, password
 		return gatewayLoginResult{}, safeMessageError{message: gatewayMessage(payload, "网关登录失败")}
 	}
 	user := extractGatewayUser(payload)
+	sessionCookie := cookie
+	data := extractGatewayData(payload)
+	requiresTwoFactor := anyBool(data["require_2fa"]) || anyBool(data["require2fa"]) || anyBool(payload["require_2fa"]) || anyBool(payload["require2fa"])
+	if requiresTwoFactor {
+		if strings.TrimSpace(twoFactorCode) == "" {
+			return gatewayLoginResult{}, gatewayTwoFactorError{message: "该 SubRouter 账号启用了双重验证，请输入验证码后继续", code: "TWO_FACTOR_REQUIRED"}
+		}
+		if sessionCookie == "" {
+			return gatewayLoginResult{}, gatewayTwoFactorError{message: "双重验证会话已失效，请重新登录", code: "TWO_FACTOR_SESSION_EXPIRED"}
+		}
+		verification, verifyErr := gatewayJSON(http.MethodPost, apiBaseURL(baseURL)+"/api/user/login/2fa", mergeGatewayHeaders(gatewaySiteHeaders(siteHost), map[string]string{"Cookie": sessionCookie}), mustJSON(map[string]string{"code": strings.TrimSpace(twoFactorCode)}))
+		if verifyErr != nil {
+			return gatewayLoginResult{}, gatewayTwoFactorError{message: verifyErr.Error(), code: "TWO_FACTOR_INVALID"}
+		}
+		defer verification.Body.Close()
+		verificationCookie := buildGatewayCookie(verification.Header.Values("Set-Cookie"))
+		var verificationPayload map[string]any
+		if err := json.NewDecoder(verification.Body).Decode(&verificationPayload); err != nil {
+			return gatewayLoginResult{}, gatewayTwoFactorError{message: "双重验证码响应异常", code: "TWO_FACTOR_INVALID"}
+		}
+		if isGatewayFalse(verificationPayload) {
+			return gatewayLoginResult{}, gatewayTwoFactorError{message: gatewayMessage(verificationPayload, "双重验证码错误"), code: "TWO_FACTOR_INVALID"}
+		}
+		sessionCookie = mergeGatewayCookies(sessionCookie, verificationCookie)
+		payload = verificationPayload
+		verifiedUser := extractGatewayUser(payload)
+		if gatewayUserHasIdentity(verifiedUser) {
+			user = verifiedUser
+		}
+	}
 	externalID := anyString(user["id"])
 	if externalID == "" {
 		externalID = username
@@ -359,7 +444,7 @@ func loginSiteGateway(baseURL string, siteHost string, username string, password
 		Email:          anyString(user["email"]),
 		DisplayName:    firstNonEmpty(anyString(user["display_name"]), anyString(user["displayName"]), anyString(user["username"]), username),
 		SiteHost:       siteHost,
-		SessionCookie:  cookie,
+		SessionCookie:  sessionCookie,
 	}, nil
 }
 
@@ -527,12 +612,14 @@ func ensureMainGatewayKey(account model.GatewayAccount) (gatewayKey, error) {
 	}
 	name := autoGatewayKeyName()
 	body := map[string]any{
-		"name":                 name,
-		"expired_time":         -1,
-		"remain_quota":         0,
-		"unlimited_quota":      true,
-		"model_limits_enabled": false,
-		"group":                defaultGatewayKeyGroup(),
+		"name":                      name,
+		"expired_time":              -1,
+		"remain_quota":              0,
+		"unlimited_quota":           true,
+		"model_limits_enabled":      false,
+		"group":                     defaultGatewayKeyGroup(),
+		"include_official_channels": true,
+		"official_key_max_discount": 0,
 	}
 	if strings.TrimSpace(config.Cfg.GatewayKeyGroup) != "" {
 		body["group"] = strings.TrimSpace(config.Cfg.GatewayKeyGroup)
@@ -567,7 +654,12 @@ func ensureSiteGatewayKey(account model.GatewayAccount) (gatewayKey, error) {
 		return key, nil
 	}
 	name := autoGatewayKeyName()
-	body := map[string]any{"name": name}
+	body := map[string]any{
+		"name":                      name,
+		"group":                     defaultGatewayKeyGroup(),
+		"include_official_channels": true,
+		"official_key_max_discount": 0,
+	}
 	if config.Cfg.GatewayKeyGroupID > 0 {
 		body["key_group_id"] = config.Cfg.GatewayKeyGroupID
 	}
@@ -1070,6 +1162,53 @@ func buildGatewayCookie(values []string) string {
 	return strings.Join(parts, "; ")
 }
 
+func mergeGatewayCookies(values ...string) string {
+	cookies := map[string]string{}
+	order := []string{}
+	for _, value := range values {
+		for _, part := range strings.Split(value, ";") {
+			separator := strings.IndexByte(part, '=')
+			if separator <= 0 {
+				continue
+			}
+			name := strings.TrimSpace(part[:separator])
+			if name == "" {
+				continue
+			}
+			if _, exists := cookies[name]; !exists {
+				order = append(order, name)
+			}
+			cookies[name] = strings.TrimSpace(part[separator+1:])
+		}
+	}
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		parts = append(parts, name+"="+cookies[name])
+	}
+	return strings.Join(parts, "; ")
+}
+
+func mergeGatewayHeaders(base map[string]string, extra map[string]string) map[string]string {
+	merged := map[string]string{}
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range extra {
+		merged[key] = value
+	}
+	return merged
+}
+
+func mustJSON(value any) []byte {
+	payload, _ := json.Marshal(value)
+	return payload
+}
+
+func isGatewayTwoFactorError(err error) bool {
+	_, ok := err.(gatewayTwoFactorError)
+	return ok
+}
+
 func extractGatewayUser(payload map[string]any) map[string]any {
 	if data, ok := payload["data"].(map[string]any); ok {
 		if user, ok := data["user"].(map[string]any); ok {
@@ -1081,6 +1220,10 @@ func extractGatewayUser(payload map[string]any) map[string]any {
 		return user
 	}
 	return map[string]any{}
+}
+
+func gatewayUserHasIdentity(user map[string]any) bool {
+	return anyString(user["id"]) != "" || anyString(user["username"]) != "" || anyString(user["email"]) != ""
 }
 
 func extractGatewayData(payload map[string]any) map[string]any {

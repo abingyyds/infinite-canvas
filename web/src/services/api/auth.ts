@@ -24,6 +24,8 @@ export type AuthPayload = {
     username: string;
     password: string;
     siteHost?: string;
+    twoFactorCode?: string;
+    turnstileToken?: string;
 };
 
 export async function login(payload: AuthPayload) {

@@ -11,6 +11,7 @@ type LoginFormValues = {
     username: string;
     password: string;
     confirmPassword?: string;
+    twoFactorCode?: string;
 };
 
 // 仅放行站内相对路径，拦截开放重定向。浏览器会忽略 URL 中的 Tab/换行/回车，并把
@@ -85,7 +86,7 @@ export default function LoginPage() {
                 return;
             }
             const action = mode === "register" ? register : login;
-            await action({ username: values.username, password: values.password, siteHost });
+            await action({ username: values.username, password: values.password, twoFactorCode: values.twoFactorCode, siteHost });
             message.success(mode === "register" ? "注册成功" : "登录成功");
             navigate(redirect, { replace: true });
         } catch (error) {
@@ -115,7 +116,14 @@ export default function LoginPage() {
                             block
                             value={mode}
                             onChange={(value) => setMode(value as "login" | "register")}
-                            options={allowRegister ? [{ label: "登录", value: "login" }, { label: "注册", value: "register" }] : [{ label: "登录", value: "login" }]}
+                            options={
+                                allowRegister
+                                    ? [
+                                          { label: "登录", value: "login" },
+                                          { label: "注册", value: "register" },
+                                      ]
+                                    : [{ label: "登录", value: "login" }]
+                            }
                         />
                     </Form.Item>
                     <Form.Item name="username" label={<span className="font-medium text-stone-800 dark:text-stone-200">用户名</span>} rules={[{ required: true, message: "请输入用户名" }]}>
@@ -124,6 +132,11 @@ export default function LoginPage() {
                     <Form.Item name="password" label={<span className="font-medium text-stone-800 dark:text-stone-200">密码</span>} rules={[{ required: true, message: "请输入密码" }]}>
                         <Input.Password prefix={<LockOutlined />} autoComplete="current-password" />
                     </Form.Item>
+                    {mode === "login" ? (
+                        <Form.Item name="twoFactorCode" label={<span className="font-medium text-stone-800 dark:text-stone-200">SubRouter 双重验证码（如已启用）</span>}>
+                            <Input prefix={<LockOutlined />} inputMode="numeric" autoComplete="one-time-code" placeholder="未启用可留空" />
+                        </Form.Item>
+                    ) : null}
                     {mode === "register" ? (
                         <Form.Item name="confirmPassword" label={<span className="font-medium text-stone-800 dark:text-stone-200">确认密码</span>} rules={[{ required: true, message: "请再次输入密码" }]}>
                             <Input.Password prefix={<LockOutlined />} autoComplete="new-password" />

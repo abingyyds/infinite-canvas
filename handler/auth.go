@@ -11,11 +11,13 @@ import (
 )
 
 type loginRequest struct {
-	Username string                `json:"username"`
-	Password string                `json:"password"`
-	Provider model.GatewayProvider `json:"provider"`
-	BaseURL  string                `json:"baseUrl"`
-	SiteHost string                `json:"siteHost"`
+	Username       string                `json:"username"`
+	Password       string                `json:"password"`
+	Provider       model.GatewayProvider `json:"provider"`
+	BaseURL        string                `json:"baseUrl"`
+	SiteHost       string                `json:"siteHost"`
+	TurnstileToken string                `json:"turnstileToken"`
+	TwoFactorCode  string                `json:"twoFactorCode"`
 }
 
 type registerRequest struct {
@@ -53,11 +55,13 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&request)
 	if request.Provider != "" || strings.TrimSpace(request.BaseURL) != "" {
 		session, err := service.LoginWithGateway(service.GatewayLoginRequest{
-			Provider: request.Provider,
-			BaseURL:  request.BaseURL,
-			Username: request.Username,
-			Password: request.Password,
-			SiteHost: request.SiteHost,
+			Provider:       request.Provider,
+			BaseURL:        request.BaseURL,
+			Username:       request.Username,
+			Password:       request.Password,
+			SiteHost:       request.SiteHost,
+			TurnstileToken: request.TurnstileToken,
+			TwoFactorCode:  request.TwoFactorCode,
 		})
 		if err != nil {
 			FailError(w, err)
@@ -68,7 +72,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := service.Login(request.Username, request.Password)
 	if err != nil {
-		gatewaySession, ok, gatewayErr := service.LoginWithDefaultGateway(request.Username, request.Password)
+		gatewaySession, ok, gatewayErr := service.LoginWithDefaultGateway(request.Username, request.Password, request.TurnstileToken, request.TwoFactorCode)
 		if gatewayErr != nil {
 			FailError(w, gatewayErr)
 			return
