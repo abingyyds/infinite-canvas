@@ -2,13 +2,17 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/basketikun/infinite-canvas/model"
 	"github.com/basketikun/infinite-canvas/repository"
 )
 
-const maxUserDataSnapshotBytes = 8 * 1024 * 1024
+// 整个快照每次保存都要整体读出、合并、再整体写回，抬上限只是止血：
+// 真正的解法是画布按项目分行存，那之前这里越大越慢。
+const maxUserDataSnapshotBytes = 32 * 1024 * 1024
 
 const canvasUserDataDomain = "canvas"
 
@@ -56,7 +60,7 @@ func SaveUserDataSnapshot(user model.AuthUser, domain string, data json.RawMessa
 		return UserDataSnapshot{}, safeMessageError{message: "数据不能为空"}
 	}
 	if len(data) > maxUserDataSnapshotBytes {
-		return UserDataSnapshot{}, safeMessageError{message: "数据过大，请减少历史记录或媒体内容"}
+		return UserDataSnapshot{}, oversizeSnapshotError(len(data), "")
 	}
 	if !json.Valid(data) {
 		return UserDataSnapshot{}, safeMessageError{message: "数据格式错误"}
@@ -96,7 +100,45 @@ func SaveUserCanvasProjects(user model.AuthUser, patch CanvasProjectsPatch) (Use
 	if err != nil {
 		return UserDataSnapshot{}, err
 	}
+	if len(data) > maxUserDataSnapshotBytes {
+		return UserDataSnapshot{}, oversizeSnapshotError(len(data), largestCanvasProjectHint(ordered))
+	}
 	return SaveUserDataSnapshot(user, canvasUserDataDomain, data)
+}
+
+// 越界后每一次保存都会失败，用户却看不到自己超了多少、该删哪个，所以把这些一起说清楚。
+// 状态码给 413，否则失败以 200 回出去，HTTP 层的监控完全看不见。
+func oversizeSnapshotError(size int, hint string) error {
+	message := fmt.Sprintf("数据 %s 超出 %s 上限，请删除部分画布或历史记录", formatSnapshotBytes(size), formatSnapshotBytes(maxUserDataSnapshotBytes))
+	if hint != "" {
+		message += "；" + hint
+	}
+	return safeMessageError{message: message, status: http.StatusRequestEntityTooLarge}
+}
+
+func largestCanvasProjectHint(projects []json.RawMessage) string {
+	largest := -1
+	for index, project := range projects {
+		if largest < 0 || len(project) > len(projects[largest]) {
+			largest = index
+		}
+	}
+	if largest < 0 {
+		return ""
+	}
+	var head struct {
+		Title string `json:"title"`
+	}
+	_ = json.Unmarshal(projects[largest], &head)
+	title := strings.TrimSpace(head.Title)
+	if title == "" {
+		title = "未命名"
+	}
+	return fmt.Sprintf("最大的画布「%s」占 %s", title, formatSnapshotBytes(len(projects[largest])))
+}
+
+func formatSnapshotBytes(size int) string {
+	return fmt.Sprintf("%.1fMB", float64(size)/(1024*1024))
 }
 
 // mergeCanvasProjects applies the patch onto the stored set and returns the projects in

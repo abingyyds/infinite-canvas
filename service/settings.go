@@ -459,6 +459,8 @@ func readAdminChannelError(body []byte, statusCode int, fallback string) error {
 
 type safeMessageError struct {
 	message string
+	// 0 表示沿用默认状态码；只有需要让监控/前端按 HTTP 状态区分的错误才设置
+	status int
 }
 
 func (err safeMessageError) Error() string {
@@ -467,6 +469,10 @@ func (err safeMessageError) Error() string {
 
 func (err safeMessageError) SafeMessage() string {
 	return err.message
+}
+
+func (err safeMessageError) SafeStatus() int {
+	return err.status
 }
 
 func modelChannelsForModel(channels []model.ModelChannel, modelName string) []model.ModelChannel {

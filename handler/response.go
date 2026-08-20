@@ -29,11 +29,16 @@ func FailStatus(w http.ResponseWriter, status int, msg string) {
 
 func FailError(w http.ResponseWriter, err error) {
 	log.Printf("request failed: %v", err)
-	if safe, ok := err.(interface{ SafeMessage() string }); ok {
-		Fail(w, safe.SafeMessage())
+	safe, ok := err.(interface{ SafeMessage() string })
+	if !ok {
+		Fail(w, "操作失败")
 		return
 	}
-	Fail(w, "操作失败")
+	if coded, ok := err.(interface{ SafeStatus() int }); ok && coded.SafeStatus() != 0 {
+		FailStatus(w, coded.SafeStatus(), safe.SafeMessage())
+		return
+	}
+	Fail(w, safe.SafeMessage())
 }
 
 func writeJSONStatus(w http.ResponseWriter, status int, value any) {

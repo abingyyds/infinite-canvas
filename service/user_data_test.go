@@ -2,6 +2,8 @@ package service
 
 import (
 	"encoding/json"
+	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -89,5 +91,34 @@ func TestMergeCanvasProjectsSkipsUnknownKeepID(t *testing.T) {
 	}
 	if joined(got) != `[{"id":"a"}]` {
 		t.Errorf("merged = %s, want [{\"id\":\"a\"}]", joined(got))
+	}
+}
+
+// 越界报错必须说清超了多少、上限多少、该删哪个，否则用户只知道保存一直失败。
+func TestOversizeSnapshotErrorNamesTheLargestProject(t *testing.T) {
+	projects := []json.RawMessage{
+		json.RawMessage(`{"id":"small","title":"小画布"}`),
+		json.RawMessage(`{"id":"big","title":"电蚊拍主图","nodes":[` + strings.Repeat(`"x",`, 1000) + `"x"]}`),
+	}
+	err := oversizeSnapshotError(9*1024*1024, largestCanvasProjectHint(projects))
+	message := err.Error()
+	for _, want := range []string{"9.0MB", "32.0MB", "电蚊拍主图"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("message = %q, want it to contain %q", message, want)
+		}
+	}
+	coded, ok := err.(interface{ SafeStatus() int })
+	if !ok || coded.SafeStatus() != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %v, want %d so HTTP monitoring can see the failure", err, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestLargestCanvasProjectHintFallsBackWhenUntitled(t *testing.T) {
+	hint := largestCanvasProjectHint([]json.RawMessage{json.RawMessage(`{"id":"a","title":"  "}`)})
+	if !strings.Contains(hint, "未命名") {
+		t.Errorf("hint = %q, want the untitled fallback", hint)
+	}
+	if largestCanvasProjectHint(nil) != "" {
+		t.Errorf("hint for an empty library = %q, want empty", largestCanvasProjectHint(nil))
 	}
 }
