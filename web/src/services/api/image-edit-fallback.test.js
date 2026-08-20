@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { shouldRetryImageEditAsJson, supportsImageFormatParams, supportsResolutionParam } from "./image";
+import { shouldRetryImageEditAsJson, supportsImageFormatParams } from "./image";
 
 describe("image edit JSON fallback trigger", () => {
     it("retries on gateway upload rejections", () => {
@@ -31,18 +31,5 @@ describe("image format params", () => {
     it("keeps them for models that do accept them", () => {
         expect(supportsImageFormatParams("dall-e-3")).toBe(true);
         expect(supportsImageFormatParams("seedream-4-0")).toBe(true);
-    });
-});
-
-describe("resolution param", () => {
-    // size 已经带着像素尺寸，resolution 只会让 gpt-image-2-4k 判 400
-    it("is dropped for gpt-image-2-4k", () => {
-        expect(supportsResolutionParam("gpt-image-2-4k")).toBe(false);
-        expect(supportsResolutionParam("gpt-image-2-4K")).toBe(false);
-    });
-
-    it("is kept everywhere else", () => {
-        expect(supportsResolutionParam("gpt-image-2")).toBe(true);
-        expect(supportsResolutionParam("seedream-4-0")).toBe(true);
     });
 });

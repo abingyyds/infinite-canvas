@@ -135,11 +135,6 @@ export function supportsImageFormatParams(model: string) {
     return !model.toLowerCase().includes("gpt-image");
 }
 
-/** gpt-image-2-4k 把 resolution 当视频参数直接判 400，它的出图尺寸只认 OpenAI 规范的 size。 */
-export function supportsResolutionParam(model: string) {
-    return !model.toLowerCase().includes("gpt-image-2-4k");
-}
-
 /** 走内置网关时后端会扣算力点，出图后刷新余额。 */
 function refreshGatewayUser(config: AiConfig, model: string) {
     if (isGatewayModel(config, model)) void useUserStore.getState().hydrateUser();
@@ -154,7 +149,7 @@ function normalizeQuality(quality: string) {
     return QUALITY_BASE[normalized] ? normalized : undefined;
 }
 
-/** auto / 空值返回 undefined，表示不指定分辨率档位，也不发 resolution 参数。 */
+/** auto / 空值返回 undefined，表示不指定分辨率档位，由模型自己决定尺寸。 */
 export function normalizeResolution(resolution: string | undefined) {
     const value = (resolution || "").trim().toLowerCase();
     return RESOLUTION_LONG_EDGE[value] ? value : undefined;
@@ -855,7 +850,6 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 prompt: withSystemPrompt(requestConfig, prompt),
                 n,
                 ...(quality ? { quality } : {}),
-                ...(resolution && supportsResolutionParam(requestConfig.model) ? { resolution } : {}),
                 ...(requestSize ? { size: requestSize } : {}),
                 ...(background ? { background } : {}),
                 ...(supportsImageFormatParams(requestConfig.model) ? { response_format: "b64_json", output_format: IMAGE_OUTPUT_FORMAT } : {}),
@@ -966,9 +960,6 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (quality) {
         formData.set("quality", quality);
     }
-    if (resolution && supportsResolutionParam(requestConfig.model)) {
-        formData.set("resolution", resolution);
-    }
     if (requestSize) {
         formData.set("size", requestSize);
     }
@@ -1000,7 +991,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         if (shouldRetryImageEditAsJson(message)) {
             return requestEditJsonFallback(
                 requestConfig,
-                { prompt: requestPrompt, n, quality, resolution, size: requestSize, background },
+                { prompt: requestPrompt, n, quality, size: requestSize, background },
                 normalizedReferences.map((image) => image.dataUrl),
                 normalizedMaskUrl || undefined,
                 message,
@@ -1020,7 +1011,7 @@ function pngFileName(name: string | undefined, fallback: string) {
 /** 部分兼容网关（SubRouter 等）不收 multipart 编辑上传，改用 JSON + base64 再试一次。 */
 async function requestEditJsonFallback(
     config: AiConfig,
-    params: { prompt: string; n: number; quality?: string; resolution?: string; size?: string; background?: string },
+    params: { prompt: string; n: number; quality?: string; size?: string; background?: string },
     images: string[],
     mask: string | undefined,
     previousMessage: string,
@@ -1036,7 +1027,6 @@ async function requestEditJsonFallback(
                 images,
                 ...(mask ? { mask } : {}),
                 ...(params.quality ? { quality: params.quality } : {}),
-                ...(params.resolution && supportsResolutionParam(config.model) ? { resolution: params.resolution } : {}),
                 ...(params.size ? { size: params.size } : {}),
                 ...(params.background ? { background: params.background } : {}),
                 ...(supportsImageFormatParams(config.model) ? { output_format: IMAGE_OUTPUT_FORMAT } : {}),
