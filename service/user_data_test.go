@@ -3,108 +3,210 @@ package service
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/basketikun/infinite-canvas/config"
+	"github.com/basketikun/infinite-canvas/model"
+	"github.com/basketikun/infinite-canvas/repository"
 )
 
-func storedProjects(pairs ...string) map[string]json.RawMessage {
-	stored := map[string]json.RawMessage{}
-	for i := 0; i < len(pairs); i += 2 {
-		stored[pairs[i]] = json.RawMessage(pairs[i+1])
-	}
-	return stored
-}
-
-func joined(projects []json.RawMessage) string {
-	out, err := json.Marshal(projects)
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "infinite-canvas-user-data")
 	if err != nil {
 		panic(err)
 	}
-	return string(out)
+	config.Cfg.StorageDriver = "sqlite"
+	config.Cfg.DatabaseDSN = filepath.Join(dir, "test.db")
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
 }
 
-func TestMergeCanvasProjectsReplacesOnlyPatchedProject(t *testing.T) {
-	stored := storedProjects(
-		"a", `{"id":"a","title":"old A"}`,
-		"b", `{"id":"b","title":"B"}`,
-	)
-	got, err := mergeCanvasProjects(stored, CanvasProjectsPatch{
-		Projects: []json.RawMessage{json.RawMessage(`{"id":"a","title":"new A"}`)},
-		KeepIDs:  []string{"a", "b"},
+func seedCanvasProjects(t *testing.T, userID string, ids ...string) {
+	t.Helper()
+	rows := make([]model.UserCanvasProject, 0, len(ids))
+	for index, id := range ids {
+		rows = append(rows, model.UserCanvasProject{
+			UserID:    userID,
+			ProjectID: id,
+			SortIndex: index,
+			Data:      `{"id":"` + id + `","title":"` + id + `"}`,
+			UpdatedAt: "2026-01-01T00:00:00Z",
+		})
+	}
+	if err := repository.SaveUserCanvasProjects(userID, rows, ids); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+}
+
+func storedCanvas(t *testing.T, userID string) []model.UserCanvasProject {
+	t.Helper()
+	items, err := repository.ListUserCanvasProjects(userID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	return items
+}
+
+func canvasIDs(items []model.UserCanvasProject) []string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ProjectID)
+	}
+	return ids
+}
+
+// 分行存储的全部意义：改一个画布不能把没动过的那些也重写一遍。
+func TestSaveCanvasProjectsLeavesUntouchedRowsAlone(t *testing.T) {
+	user := model.AuthUser{ID: "user-untouched"}
+	seedCanvasProjects(t, user.ID, "a", "b", "c")
+
+	_, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{
+		Projects: []json.RawMessage{json.RawMessage(`{"id":"b","title":"新的 B"}`)},
+		KeepIDs:  []string{"a", "b", "c"},
 	})
 	if err != nil {
-		t.Fatalf("merge failed: %v", err)
+		t.Fatalf("save: %v", err)
 	}
-	want := `[{"id":"a","title":"new A"},{"id":"b","title":"B"}]`
-	if joined(got) != want {
-		t.Errorf("merged = %s, want %s", joined(got), want)
+
+	items := storedCanvas(t, user.ID)
+	if got := strings.Join(canvasIDs(items), ","); got != "a,b,c" {
+		t.Fatalf("order = %s, want a,b,c", got)
+	}
+	for _, item := range items {
+		if item.ProjectID == "b" {
+			if item.Data != `{"id":"b","title":"新的 B"}` {
+				t.Errorf("b data = %s, want the patched body", item.Data)
+			}
+			if item.UpdatedAt == "2026-01-01T00:00:00Z" {
+				t.Error("b should have been rewritten")
+			}
+			continue
+		}
+		if item.UpdatedAt != "2026-01-01T00:00:00Z" {
+			t.Errorf("%s was rewritten (updatedAt %s); only the patched project may be written", item.ProjectID, item.UpdatedAt)
+		}
 	}
 }
 
-func TestMergeCanvasProjectsDropsIDsMissingFromKeepIDs(t *testing.T) {
-	stored := storedProjects(
-		"a", `{"id":"a","title":"A"}`,
-		"b", `{"id":"b","title":"B"}`,
-		"c", `{"id":"c","title":"C"}`,
-	)
-	got, err := mergeCanvasProjects(stored, CanvasProjectsPatch{KeepIDs: []string{"c", "a"}})
-	if err != nil {
-		t.Fatalf("merge failed: %v", err)
+func TestSaveCanvasProjectsDeletesWhatKeepIDsOmits(t *testing.T) {
+	user := model.AuthUser{ID: "user-delete"}
+	seedCanvasProjects(t, user.ID, "a", "b", "c")
+
+	if _, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{KeepIDs: []string{"a", "c"}}); err != nil {
+		t.Fatalf("save: %v", err)
 	}
-	want := `[{"id":"c","title":"C"},{"id":"a","title":"A"}]`
-	if joined(got) != want {
-		t.Errorf("merged = %s, want %s", joined(got), want)
+	if got := strings.Join(canvasIDs(storedCanvas(t, user.ID)), ","); got != "a,c" {
+		t.Fatalf("remaining = %s, want a,c", got)
 	}
 }
 
-func TestMergeCanvasProjectsInsertsNewProject(t *testing.T) {
-	got, err := mergeCanvasProjects(storedProjects(), CanvasProjectsPatch{
-		Projects: []json.RawMessage{json.RawMessage(`{"id":"new","title":"N"}`)},
-		KeepIDs:  []string{"new"},
+// 只调顺序时客户端不会重传画布内容，顺序也必须跟着变。
+func TestSaveCanvasProjectsReordersWithoutResendingData(t *testing.T) {
+	user := model.AuthUser{ID: "user-reorder"}
+	seedCanvasProjects(t, user.ID, "a", "b", "c")
+
+	if _, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{KeepIDs: []string{"c", "a", "b"}}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	items := storedCanvas(t, user.ID)
+	if got := strings.Join(canvasIDs(items), ","); got != "c,a,b" {
+		t.Fatalf("order = %s, want c,a,b", got)
+	}
+	if items[0].Data != `{"id":"c","title":"c"}` {
+		t.Errorf("c data = %s, want it untouched by a reorder", items[0].Data)
+	}
+}
+
+// 上传了但 keepIds 里没有的画布，客户端下一步就要删它，不该落库。
+func TestSaveCanvasProjectsIgnoresProjectsOutsideKeepIDs(t *testing.T) {
+	user := model.AuthUser{ID: "user-outside"}
+	_, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{
+		Projects: []json.RawMessage{json.RawMessage(`{"id":"a"}`), json.RawMessage(`{"id":"ghost"}`)},
+		KeepIDs:  []string{"a"},
 	})
 	if err != nil {
-		t.Fatalf("merge failed: %v", err)
+		t.Fatalf("save: %v", err)
 	}
-	if joined(got) != `[{"id":"new","title":"N"}]` {
-		t.Errorf("merged = %s", joined(got))
+	if got := strings.Join(canvasIDs(storedCanvas(t, user.ID)), ","); got != "a" {
+		t.Fatalf("stored = %s, want a", got)
 	}
 }
 
-func TestMergeCanvasProjectsRejectsProjectWithoutID(t *testing.T) {
-	_, err := mergeCanvasProjects(storedProjects(), CanvasProjectsPatch{
+func TestSaveCanvasProjectsRejectsProjectWithoutID(t *testing.T) {
+	user := model.AuthUser{ID: "user-no-id"}
+	_, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{
 		Projects: []json.RawMessage{json.RawMessage(`{"title":"no id"}`)},
-		KeepIDs:  []string{"x"},
+		KeepIDs:  []string{"a"},
 	})
-	if err == nil {
-		t.Fatal("expected an error for a project without id")
-	}
-	if err.Error() != "画布数据缺少 id" {
-		t.Errorf("error = %q, want %q", err.Error(), "画布数据缺少 id")
+	if err == nil || err.Error() != "画布数据缺少 id" {
+		t.Fatalf("error = %v, want 画布数据缺少 id", err)
 	}
 }
 
-// KeepIDs 引用了服务端没有、这次也没上传的 id 时跳过，而不是塞进 null。
-func TestMergeCanvasProjectsSkipsUnknownKeepID(t *testing.T) {
-	got, err := mergeCanvasProjects(storedProjects("a", `{"id":"a"}`), CanvasProjectsPatch{KeepIDs: []string{"a", "ghost"}})
+// 老库是一整行 blob，第一次读的时候要原样拆成行，并且把旧行清掉。
+func TestReadCanvasSnapshotMigratesLegacyBlob(t *testing.T) {
+	user := model.AuthUser{ID: "user-legacy"}
+	legacy := `{"projects":[{"id":"a","title":"A"},{"title":"没有 id"},{"id":"b","title":"B"}]}`
+	if _, err := repository.SaveUserDataSnapshot(model.UserDataSnapshot{
+		UserID: user.ID, Domain: "canvas", Data: legacy, UpdatedAt: "2026-01-02T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed legacy: %v", err)
+	}
+
+	snapshot, err := GetUserDataSnapshot(user, "canvas")
 	if err != nil {
-		t.Fatalf("merge failed: %v", err)
+		t.Fatalf("read: %v", err)
 	}
-	if joined(got) != `[{"id":"a"}]` {
-		t.Errorf("merged = %s, want [{\"id\":\"a\"}]", joined(got))
+	want := `{"projects":[{"id":"a","title":"A"},{"id":"b","title":"B"}]}`
+	if string(snapshot.Data) != want {
+		t.Errorf("data = %s, want %s", snapshot.Data, want)
+	}
+	if snapshot.UpdatedAt != "2026-01-02T00:00:00Z" {
+		t.Errorf("updatedAt = %q, want the legacy row's timestamp", snapshot.UpdatedAt)
+	}
+	if got := strings.Join(canvasIDs(storedCanvas(t, user.ID)), ","); got != "a,b" {
+		t.Errorf("rows = %s, want a,b", got)
+	}
+	if _, ok, _ := repository.GetUserDataSnapshot(user.ID, "canvas"); ok {
+		t.Error("the legacy blob row should be gone once it has been split")
 	}
 }
 
-// 越界报错必须说清超了多少、上限多少、该删哪个，否则用户只知道保存一直失败。
-func TestOversizeSnapshotErrorNamesTheLargestProject(t *testing.T) {
-	projects := []json.RawMessage{
-		json.RawMessage(`{"id":"small","title":"小画布"}`),
-		json.RawMessage(`{"id":"big","title":"电蚊拍主图","nodes":[` + strings.Repeat(`"x",`, 1000) + `"x"]}`),
+// 老客户端仍会往通用接口 POST 整库，也要落到分行存储上。
+func TestSaveWholeCanvasSnapshotGoesThroughPerProjectRows(t *testing.T) {
+	user := model.AuthUser{ID: "user-whole"}
+	body := json.RawMessage(`{"projects":[{"id":"a","title":"A"},{"id":"b","title":"B"}]}`)
+	if _, err := SaveUserDataSnapshot(user, "canvas", body); err != nil {
+		t.Fatalf("save: %v", err)
 	}
-	err := oversizeSnapshotError(9*1024*1024, largestCanvasProjectHint(projects))
-	message := err.Error()
-	for _, want := range []string{"9.0MB", "32.0MB", "电蚊拍主图"} {
-		if !strings.Contains(message, want) {
-			t.Errorf("message = %q, want it to contain %q", message, want)
+	if got := strings.Join(canvasIDs(storedCanvas(t, user.ID)), ","); got != "a,b" {
+		t.Fatalf("rows = %s, want a,b", got)
+	}
+	if _, ok, _ := repository.GetUserDataSnapshot(user.ID, "canvas"); ok {
+		t.Error("the canvas domain must not fall back to a single blob row")
+	}
+}
+
+func TestReadCanvasSnapshotWithNoProjects(t *testing.T) {
+	snapshot, err := GetUserDataSnapshot(model.AuthUser{ID: "user-empty"}, "canvas")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(snapshot.Data) != "null" {
+		t.Errorf("data = %s, want null", snapshot.Data)
+	}
+}
+
+func TestOversizeCanvasProjectErrorNamesTheCanvas(t *testing.T) {
+	project := json.RawMessage(`{"id":"big","title":"电蚊拍主图","nodes":[` + strings.Repeat(`"x",`, 100) + `"x"]}`)
+	err := oversizeCanvasProjectError(project)
+	for _, want := range []string{"电蚊拍主图", "8.0MB"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message = %q, want it to contain %q", err.Error(), want)
 		}
 	}
 	coded, ok := err.(interface{ SafeStatus() int })
@@ -113,12 +215,8 @@ func TestOversizeSnapshotErrorNamesTheLargestProject(t *testing.T) {
 	}
 }
 
-func TestLargestCanvasProjectHintFallsBackWhenUntitled(t *testing.T) {
-	hint := largestCanvasProjectHint([]json.RawMessage{json.RawMessage(`{"id":"a","title":"  "}`)})
-	if !strings.Contains(hint, "未命名") {
-		t.Errorf("hint = %q, want the untitled fallback", hint)
-	}
-	if largestCanvasProjectHint(nil) != "" {
-		t.Errorf("hint for an empty library = %q, want empty", largestCanvasProjectHint(nil))
+func TestCanvasProjectTitleFallsBackWhenUntitled(t *testing.T) {
+	if got := canvasProjectTitle(json.RawMessage(`{"id":"a","title":"  "}`)); got != "未命名" {
+		t.Errorf("title = %q, want 未命名", got)
 	}
 }

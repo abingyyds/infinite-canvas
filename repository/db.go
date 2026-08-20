@@ -69,6 +69,7 @@ func DB() (*gorm.DB, error) {
 			&model.Asset{},
 			&model.Setting{},
 			&model.UserDataSnapshot{},
+			&model.UserCanvasProject{},
 		)
 	})
 	return db, dbErr
