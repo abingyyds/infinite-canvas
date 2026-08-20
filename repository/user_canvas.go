@@ -30,21 +30,24 @@ func SaveUserCanvasProjects(userID string, changed []model.UserCanvasProject, ke
 	})
 }
 
-// MigrateUserCanvasSnapshot splits a legacy whole-library row into per-project rows and drops the
-// legacy row in the same transaction. Leaving that row behind would let a later request replay the
-// stale blob over edits made in between.
+// MigrateUserCanvasSnapshot splits a legacy whole-library row into per-project rows. Deleting the
+// legacy row comes first and gates the write: two concurrent requests can both read the blob, and
+// only the transaction that wins the delete may write rows — the loser would otherwise replay the
+// stale blob over whatever the winner and any save after it just stored.
 func MigrateUserCanvasSnapshot(userID string, domain string, rows []model.UserCanvasProject, keepIDs []string) error {
 	db, err := DB()
 	if err != nil {
 		return err
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		if len(keepIDs) > 0 {
-			if err := writeUserCanvasProjects(tx, userID, rows, keepIDs); err != nil {
-				return err
-			}
+		deleted := tx.Where("user_id = ? AND domain = ?", userID, domain).Delete(&model.UserDataSnapshot{})
+		if deleted.Error != nil {
+			return deleted.Error
 		}
-		return tx.Where("user_id = ? AND domain = ?", userID, domain).Delete(&model.UserDataSnapshot{}).Error
+		if deleted.RowsAffected == 0 || len(keepIDs) == 0 {
+			return nil
+		}
+		return writeUserCanvasProjects(tx, userID, rows, keepIDs)
 	})
 }
 

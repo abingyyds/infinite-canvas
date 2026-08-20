@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/basketikun/infinite-canvas/model"
 	"github.com/basketikun/infinite-canvas/repository"
@@ -156,7 +157,7 @@ func readCanvasSnapshot(userID string) (UserDataSnapshot, error) {
 			body.WriteString(",")
 		}
 		body.WriteString(item.Data)
-		if item.UpdatedAt > updatedAt {
+		if isLaterTimestamp(item.UpdatedAt, updatedAt) {
 			updatedAt = item.UpdatedAt
 		}
 	}
@@ -165,7 +166,7 @@ func readCanvasSnapshot(userID string) (UserDataSnapshot, error) {
 }
 
 // 老数据把整个画布库存成 user_data_snapshots 的一行，第一次读写时拆成行再删掉旧行。
-// ponytail: 不加锁，并发请求最多重复拆一次，写进去的是同样的内容
+// 并发请求不加锁：谁在事务里删掉旧行谁才写行，见 repository.MigrateUserCanvasSnapshot。
 func migrateLegacyCanvasSnapshot(userID string) error {
 	item, ok, err := repository.GetUserDataSnapshot(userID, canvasUserDataDomain)
 	if err != nil || !ok {
@@ -178,6 +179,7 @@ func migrateLegacyCanvasSnapshot(userID string) error {
 	return repository.MigrateUserCanvasSnapshot(userID, canvasUserDataDomain, legacyCanvasRows(userID, patch, item.UpdatedAt), patch.KeepIDs)
 }
 
+// legacyCanvasRows expects a patch built by canvasPatchFromSnapshot: Projects[i] pairs with KeepIDs[i].
 func legacyCanvasRows(userID string, patch CanvasProjectsPatch, updatedAt string) []model.UserCanvasProject {
 	rows := make([]model.UserCanvasProject, 0, len(patch.KeepIDs))
 	for index, project := range patch.Projects {
@@ -244,6 +246,19 @@ func canvasProjectTitle(project json.RawMessage) string {
 		return "未命名"
 	}
 	return title
+}
+
+// RFC3339 带时区偏移时字典序不等于时间序，所以按解析后的时间比；解析不了的退回字符串比较。
+func isLaterTimestamp(candidate string, current string) bool {
+	if current == "" {
+		return candidate != ""
+	}
+	a, errA := time.Parse(time.RFC3339, candidate)
+	b, errB := time.Parse(time.RFC3339, current)
+	if errA != nil || errB != nil {
+		return candidate > current
+	}
+	return a.After(b)
 }
 
 func formatSnapshotBytes(size int) string {

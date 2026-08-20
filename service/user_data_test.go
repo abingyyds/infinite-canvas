@@ -220,3 +220,44 @@ func TestCanvasProjectTitleFallsBackWhenUntitled(t *testing.T) {
 		t.Errorf("title = %q, want 未命名", got)
 	}
 }
+
+// 两个请求同时读到 legacy blob 时只有赢得删除的事务能写行；
+// 输家拿着陈旧 blob 重放时必须什么都不写，否则会覆盖赢家之后落库的编辑。
+func TestMigrateLegacySnapshotLoserDoesNotReplayStaleBlob(t *testing.T) {
+	user := model.AuthUser{ID: "user-migrate-race"}
+	seedCanvasProjects(t, user.ID, "a")
+
+	stale := []model.UserCanvasProject{{
+		UserID: user.ID, ProjectID: "a", SortIndex: 0,
+		Data: `{"id":"a","title":"stale"}`, UpdatedAt: "2020-01-01T00:00:00Z",
+	}}
+	if err := repository.MigrateUserCanvasSnapshot(user.ID, "canvas", stale, []string{"a"}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	items := storedCanvas(t, user.ID)
+	if len(items) != 1 || items[0].Data != `{"id":"a","title":"a"}` {
+		t.Fatalf("data = %+v, want the winner's row left untouched", items)
+	}
+}
+
+// RFC3339 带时区偏移时字典序不等于时间序，UpdatedAt 要按时间挑最新的。
+func TestReadCanvasSnapshotPicksChronologicallyLatestUpdatedAt(t *testing.T) {
+	user := model.AuthUser{ID: "user-updated-at"}
+	rows := []model.UserCanvasProject{
+		// 16:00+08:00 是 08:00Z，字典序却排在 09:00Z 后面
+		{UserID: user.ID, ProjectID: "a", SortIndex: 0, Data: `{"id":"a"}`, UpdatedAt: "2026-08-20T16:00:00+08:00"},
+		{UserID: user.ID, ProjectID: "b", SortIndex: 1, Data: `{"id":"b"}`, UpdatedAt: "2026-08-20T09:00:00Z"},
+	}
+	if err := repository.SaveUserCanvasProjects(user.ID, rows, []string{"a", "b"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	snapshot, err := GetUserDataSnapshot(user, "canvas")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if snapshot.UpdatedAt != "2026-08-20T09:00:00Z" {
+		t.Fatalf("updatedAt = %q, want 2026-08-20T09:00:00Z", snapshot.UpdatedAt)
+	}
+}
