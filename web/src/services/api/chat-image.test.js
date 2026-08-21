@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { isChatCompletionImageModel, parseChatImagePayload } from "./image";
+import { isChatCompletionImageModel, isRemoteImageUrl, parseChatImagePayload } from "./image";
 
 const PNG = "data:image/png;base64,iVBORw0KGgo=";
 
@@ -38,5 +38,12 @@ describe("chat image payload", () => {
     it("surfaces gateway errors", () => {
         expect(() => parseChatImagePayload({ code: 1, msg: "无效的令牌" })).toThrow("无效的令牌");
         expect(() => parseChatImagePayload({ error: { message: "model not found" } })).toThrow("model not found");
+    });
+
+    // 卖家返回的 http(s) 外链要走后端代理下载，data: 直接可用。
+    it("tells seller-hosted links apart from inline data urls", () => {
+        expect(isRemoteImageUrl("https://cdn.test/a.jpg?X-Amz-Signature=abc")).toBe(true);
+        expect(isRemoteImageUrl("http://cdn.test/a.jpg")).toBe(true);
+        expect(isRemoteImageUrl(PNG)).toBe(false);
     });
 });

@@ -8,7 +8,7 @@ import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile, normalizeImageDataUrlForUpload } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
-import { imageToDataUrl } from "@/services/image-storage";
+import { blobToDataUrl, imageToDataUrl } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
 
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
@@ -780,6 +780,27 @@ export function parseChatImagePayload(payload: ChatImagePayload) {
     return [...new Set(urls)];
 }
 
+export function isRemoteImageUrl(value: string) {
+    return value.startsWith("http://") || value.startsWith("https://");
+}
+
+/** 卖家常以预签名外链返回图片：没有 CORS 头、几小时就过期，生成当场经后端代理取回字节。 */
+async function ensureImageDataUrl(url: string, options?: RequestOptions) {
+    if (!isRemoteImageUrl(url)) return url;
+    const token = useUserStore.getState().token;
+    try {
+        const response = await axios.post<Blob>(
+            "/api/media-content",
+            { url },
+            { responseType: "blob", headers: token ? { Authorization: `Bearer ${token}` } : undefined, signal: options?.signal },
+        );
+        return await blobToDataUrl(response.data);
+    } catch (error) {
+        if (axios.isCancel(error) || options?.signal?.aborted) throw error;
+        throw new Error(apiText("imageDownloadFailed"));
+    }
+}
+
 async function requestChatImagesOnce(config: AiConfig, prompt: string, references: string[], options?: RequestOptions) {
     const content: AiTextMessage["content"] = references.length
         ? [{ type: "text" as const, text: prompt }, ...references.map((url) => ({ type: "image_url" as const, image_url: { url } }))]
@@ -789,7 +810,8 @@ async function requestChatImagesOnce(config: AiConfig, prompt: string, reference
         { model: config.model, messages: [{ role: "user", content }], stream: false },
         { headers: aiHeaders(config, "application/json"), signal: options?.signal },
     );
-    return parseChatImagePayload(response.data).map((dataUrl) => ({ id: nanoid(), dataUrl }));
+    const urls = parseChatImagePayload(response.data);
+    return Promise.all(urls.map(async (url) => ({ id: nanoid(), dataUrl: await ensureImageDataUrl(url, options) })));
 }
 
 async function requestChatImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, options?: RequestOptions) {

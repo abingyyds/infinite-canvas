@@ -52,7 +52,9 @@ func New() *gin.Engine {
 	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
 	api.GET("/prompts/source.json", middleware.OptionalAuth, gin.WrapF(handler.PromptsSource))
 	// 代下载只针对用户自己配置的渠道地址，挂在 UserAuth 后面避免成为匿名可用的外链代理。
-	api.POST("/video-content", middleware.UserAuth, gin.WrapF(handler.VideoContent))
+	// video-content 是老前端还在用的旧路由名，和 media-content 指向同一个 handler。
+	api.POST("/video-content", middleware.UserAuth, gin.WrapF(handler.MediaContent))
+	api.POST("/media-content", middleware.UserAuth, gin.WrapF(handler.MediaContent))
 	api.GET("/assets", middleware.OptionalAuth, gin.WrapF(handler.Assets))
 	api.POST("/admin/login", gin.WrapF(handler.AdminLogin))
 	api.GET("/gateway/status", middleware.UserAuth, gin.WrapF(handler.GatewayStatus))
