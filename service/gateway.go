@@ -331,7 +331,7 @@ func loginMainGateway(baseURL string, siteHost string, username string, password
 	requiresTwoFactor := anyBool(data["require_2fa"]) || anyBool(data["require2fa"]) || anyBool(payload["require_2fa"]) || anyBool(payload["require2fa"])
 	if requiresTwoFactor {
 		if strings.TrimSpace(twoFactorCode) == "" {
-			return gatewayLoginResult{}, gatewayTwoFactorError{message: "该 SubRouter 账号启用了双重验证，请输入验证码后继续", code: "TWO_FACTOR_REQUIRED"}
+			return gatewayLoginResult{}, gatewayTwoFactorError{message: "该账号启用了双重验证，请输入验证码后继续", code: "TWO_FACTOR_REQUIRED"}
 		}
 		if sessionCookie == "" {
 			return gatewayLoginResult{}, gatewayTwoFactorError{message: "双重验证会话已失效，请重新登录", code: "TWO_FACTOR_SESSION_EXPIRED"}
@@ -407,7 +407,7 @@ func loginSiteGateway(baseURL string, siteHost string, username string, password
 	requiresTwoFactor := anyBool(data["require_2fa"]) || anyBool(data["require2fa"]) || anyBool(payload["require_2fa"]) || anyBool(payload["require2fa"])
 	if requiresTwoFactor {
 		if strings.TrimSpace(twoFactorCode) == "" {
-			return gatewayLoginResult{}, gatewayTwoFactorError{message: "该 SubRouter 账号启用了双重验证，请输入验证码后继续", code: "TWO_FACTOR_REQUIRED"}
+			return gatewayLoginResult{}, gatewayTwoFactorError{message: "该账号启用了双重验证，请输入验证码后继续", code: "TWO_FACTOR_REQUIRED"}
 		}
 		if sessionCookie == "" {
 			return gatewayLoginResult{}, gatewayTwoFactorError{message: "双重验证会话已失效，请重新登录", code: "TWO_FACTOR_SESSION_EXPIRED"}

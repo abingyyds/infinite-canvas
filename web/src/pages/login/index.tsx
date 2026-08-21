@@ -133,7 +133,7 @@ export default function LoginPage() {
                         <Input.Password prefix={<LockOutlined />} autoComplete="current-password" />
                     </Form.Item>
                     {mode === "login" ? (
-                        <Form.Item name="twoFactorCode" label={<span className="font-medium text-stone-800 dark:text-stone-200">SubRouter 双重验证码（如已启用）</span>}>
+                        <Form.Item name="twoFactorCode" label={<span className="font-medium text-stone-800 dark:text-stone-200">双重验证码（如已启用）</span>}>
                             <Input prefix={<LockOutlined />} inputMode="numeric" autoComplete="one-time-code" placeholder="未启用可留空" />
                         </Form.Item>
                     ) : null}
