@@ -40,6 +40,20 @@ describe("chat image payload", () => {
         expect(() => parseChatImagePayload({ error: { message: "model not found" } })).toThrow("model not found");
     });
 
+    // 4K生图渠道的真实响应：markdown 链接文字带说明、URL 是含查询参数的预签名地址。
+    it("extracts the full presigned url from a real seller response", () => {
+        const url =
+            "https://46a49f5f12ab7c128be855497554b6ec.r2.cloudflarestorage.com/img1/photos/20260822/20260822_005840_9b0671b393_1.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=1825bf44ea2d7fa30088e29673cbdc46%2F20260821%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260821T165929Z&X-Amz-Expires=18000&X-Amz-SignedHeaders=host&X-Amz-Signature=b0505826bedc3bca099a3ee9fb167e4418cb844b0490dbd8a969f03b441cd248";
+        const payload = {
+            id: "20260822_005841_0974b4c4ce",
+            object: "chat.completion",
+            model: "gemini-3-pro-image",
+            choices: [{ index: 0, message: { role: "assistant", content: `![原图链接5小时有效](${url})`, refusal: null }, finish_reason: "stop" }],
+        };
+        expect(parseChatImagePayload(payload)).toEqual([url]);
+        expect(isRemoteImageUrl(url)).toBe(true);
+    });
+
     // 卖家返回的 http(s) 外链要走后端代理下载，data: 直接可用。
     it("tells seller-hosted links apart from inline data urls", () => {
         expect(isRemoteImageUrl("https://cdn.test/a.jpg?X-Amz-Signature=abc")).toBe(true);
