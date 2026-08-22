@@ -57,11 +57,11 @@ export function AgentConnectView({
                     [t("agent.connect.removePlugin"), AGENT_PLUGIN_REMOVE_COMMAND],
                     [t("agent.connect.removeMcp"), AGENT_MCP_REMOVE_COMMAND],
                 ].map(([label, command]) => (
-                    <div key={command} className="flex items-center gap-2 rounded-md border bg-transparent px-2 py-1.5" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
+                    <div key={command} className="flex min-w-0 items-start gap-2 rounded-md border bg-transparent px-2 py-1.5" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
                         <span className="shrink-0 text-[11px]" style={{ color: theme.node.muted }}>
                             {label}
                         </span>
-                        <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-[11px] leading-5">{command}</code>
+                        <code className="min-w-0 flex-1 break-words py-0.5 text-[11px] leading-5">{command}</code>
                         <Tooltip title={t("agent.connect.copyCommand")}>
                             <Button size="small" type="text" className="!h-6 !w-6 !min-w-6" icon={<Copy className="size-3.5" />} onClick={() => copyCommand(command)} />
                         </Tooltip>
@@ -89,8 +89,8 @@ export function AgentConnectView({
                                 </div>
                                 <div className="mt-2 grid gap-1.5">
                                     {step.commands.map((command) => (
-                                        <div key={command} className="flex items-center gap-2 rounded-md border bg-transparent px-2 py-1.5" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
-                                            <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-[11px] leading-5">{command}</code>
+                                        <div key={command} className="flex min-w-0 items-start gap-2 rounded-md border bg-transparent px-2 py-1.5" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
+                                            <code className="min-w-0 flex-1 break-words py-0.5 text-[11px] leading-5">{command}</code>
                                             <Tooltip title={t("agent.connect.copyCommand")}>
                                                 <Button size="small" type="text" className="!h-6 !w-6 !min-w-6" icon={<Copy className="size-3.5" />} onClick={() => copyCommand(command)} />
                                             </Tooltip>
