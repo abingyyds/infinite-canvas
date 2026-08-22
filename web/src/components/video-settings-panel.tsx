@@ -35,7 +35,6 @@ const sizeOptions = [
 ];
 
 const secondOptions = [6, 10, 12, 16, 20];
-const seedanceRatioLabelKeys: Record<string, string> = { "16:9": "landscape", "9:16": "portrait", "1:1": "square", "4:3": "standardLandscape", "3:4": "standardPortrait", "21:9": "cinematic", adaptive: "adaptive" };
 
 export const videoResolutionOptions = resolutionOptions.map((item) => ({ value: item.value, label: item.label }));
 export const videoSizeOptions = sizeOptions.map((item) => ({
@@ -136,6 +135,8 @@ export function VideoSettingsPanel({ config, model: selectedModel, onConfigChang
     );
 }
 
+const seedanceRatioLabelKeys: Record<string, string> = { "16:9": "landscape", "9:16": "portrait", "1:1": "square", "4:3": "standardLandscape", "3:4": "standardPortrait", "21:9": "cinematic", adaptive: "adaptive" };
+
 function SeedanceVideoSettingsPanel({ config, model: selectedModel, onConfigChange, theme, showTitle, className }: VideoSettingsPanelProps) {
     const { t } = useTranslation();
     const model = resolveVideoSettingsModel(config, selectedModel);
@@ -206,9 +207,7 @@ export function videoResolutionLabel(value: string) {
 }
 
 export function videoSizeLabel(value: string) {
-    const ratio = normalizeSeedanceRatio(value);
     if (value === "adaptive" || value === "auto") return i18n.t("settingsPanels.video.adaptive");
-    if (ratio === value) return i18n.t(`settingsPanels.video.ratios.${seedanceRatioLabelKeys[ratio]}`);
     const size = normalizeVideoSizeValue(value);
     const option = sizeOptions.find((item) => item.value === size);
     return option ? i18n.t(`settingsPanels.video.sizes.${option.labelKey}`) : size;
@@ -307,6 +306,12 @@ function SizePreview({ width, height, color }: { width: number; height: number; 
     return <span className="rounded-[3px] border-2" style={{ width: previewWidth, height: previewHeight, borderColor: color }} />;
 }
 
+function readSizeDimensions(size: string) {
+    if (size === "auto") return { width: 0, height: 0 };
+    const match = size.match(/^(\d+)x(\d+)$/);
+    return { width: Number(match?.[1]) || 1280, height: Number(match?.[2]) || 720 };
+}
+
 function ratioPreview(ratio: string) {
     if (ratio === "9:16") return { width: 9, height: 16 };
     if (ratio === "1:1") return { width: 1, height: 1 };
@@ -328,10 +333,4 @@ function SwitchRow({ label, checked, theme, onChange }: { label: string; checked
             </span>
         </div>
     );
-}
-
-function readSizeDimensions(size: string) {
-    if (size === "auto") return { width: 0, height: 0 };
-    const match = size.match(/^(\d+)x(\d+)$/);
-    return { width: Number(match?.[1]) || 1280, height: Number(match?.[2]) || 720 };
 }
