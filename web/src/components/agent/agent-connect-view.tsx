@@ -8,6 +8,8 @@ import { canvasThemes } from "@/lib/canvas-theme";
 
 const AGENT_PLUGIN_REMOVE_COMMAND = "codex plugin remove infinite-canvas";
 const AGENT_MCP_REMOVE_COMMAND = "codex mcp remove infinite-canvas";
+// marketplace 名字来自仓库里的 .agents/plugins/marketplace.json，所以两条命令是固定搭配。
+const AGENT_PLUGIN_INSTALL_COMMANDS = ["codex plugin marketplace add abingyyds/infinite-canvas", "codex plugin add infinite-canvas@infinite-canvas-local"];
 
 export function AgentConnectView({
     theme,
@@ -34,7 +36,10 @@ export function AgentConnectView({
 }) {
     const { t } = useTranslation();
     const { message } = App.useApp();
-    const steps = [{ title: t("agent.connect.pluginTitle"), text: t("agent.connect.pluginText") }, { title: t("agent.connect.directTitle"), text: t("agent.connect.directText"), command: "npx -y @basketikun/canvas-agent" }];
+    const steps = [
+        { title: t("agent.connect.pluginTitle"), text: t("agent.connect.pluginText"), commands: AGENT_PLUGIN_INSTALL_COMMANDS },
+        { title: t("agent.connect.directTitle"), text: t("agent.connect.directText"), commands: ["npx -y @basketikun/canvas-agent"] },
+    ];
     const statusText = connectError ? t("agent.status.failed") : connected ? activity : enabled ? t("agent.status.connecting") : t("agent.status.disconnected");
     const statusColor = connectError ? "#dc2626" : connected ? "#16a34a" : enabled ? "#d97706" : theme.node.muted;
     const copyCommand = (command: string) => {
@@ -75,28 +80,27 @@ export function AgentConnectView({
                     </div>
                 </div>
                 <div className="space-y-2">
-                    {steps.map((step, index) => {
-                        const command = "command" in step ? step.command : "";
-                        return (
-                            <Fragment key={step.title}>
-                                <div className="rounded-lg px-3 py-2.5">
-                                    <div className="text-sm font-medium leading-5">{step.title}</div>
-                                    <div className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>
-                                        {step.text}
-                                    </div>
-                                    {command ? (
-                                        <div className="mt-2 flex items-center gap-2 rounded-md border bg-transparent px-2 py-1.5" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
+                    {steps.map((step, index) => (
+                        <Fragment key={step.title}>
+                            <div className="rounded-lg px-3 py-2.5">
+                                <div className="text-sm font-medium leading-5">{step.title}</div>
+                                <div className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>
+                                    {step.text}
+                                </div>
+                                <div className="mt-2 grid gap-1.5">
+                                    {step.commands.map((command) => (
+                                        <div key={command} className="flex items-center gap-2 rounded-md border bg-transparent px-2 py-1.5" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
                                             <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-[11px] leading-5">{command}</code>
                                             <Tooltip title={t("agent.connect.copyCommand")}>
                                                 <Button size="small" type="text" className="!h-6 !w-6 !min-w-6" icon={<Copy className="size-3.5" />} onClick={() => copyCommand(command)} />
                                             </Tooltip>
                                         </div>
-                                    ) : null}
+                                    ))}
                                 </div>
-                                {index === 0 ? codexPluginReminder : null}
-                            </Fragment>
-                        );
-                    })}
+                            </div>
+                            {index === 0 ? codexPluginReminder : null}
+                        </Fragment>
+                    ))}
                 </div>
                 <div className="rounded-lg border p-3" style={{ borderColor: theme.node.stroke }}>
                     <div className="flex flex-wrap items-start justify-between gap-3">
