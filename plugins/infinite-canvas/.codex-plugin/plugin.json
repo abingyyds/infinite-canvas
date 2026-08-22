@@ -4,10 +4,10 @@
   "description": "Use Codex to read and operate Infinite Canvas through the local Canvas Agent MCP server.",
   "author": {
     "name": "basketikun",
-    "url": "https://canvas.best/"
+    "url": "https://p.orbitlink.me/"
   },
-  "homepage": "https://canvas.best/",
-  "repository": "https://github.com/basketikun/infinite-canvas",
+  "homepage": "https://p.orbitlink.me/",
+  "repository": "https://github.com/abingyyds/infinite-canvas",
   "license": "AGPL-3.0",
   "keywords": ["infinite-canvas", "canvas", "mcp", "agent"],
   "skills": "./skills/",
@@ -19,7 +19,7 @@
     "developerName": "basketikun",
     "category": "Productivity",
     "capabilities": ["Canvas", "MCP", "Creative Workflow"],
-    "websiteURL": "https://canvas.best/",
+    "websiteURL": "https://p.orbitlink.me/",
     "defaultPrompt": [
       "打开 Infinite Canvas",
       "读取当前画布并总结节点结构",
