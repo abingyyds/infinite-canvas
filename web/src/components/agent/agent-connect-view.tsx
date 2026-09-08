@@ -38,7 +38,7 @@ export function AgentConnectView({
     const { message } = App.useApp();
     const steps = [
         { title: t("agent.connect.pluginTitle"), text: t("agent.connect.pluginText"), commands: AGENT_PLUGIN_INSTALL_COMMANDS },
-        { title: t("agent.connect.directTitle"), text: t("agent.connect.directText"), commands: ["npx -y @basketikun/canvas-agent"] },
+        { title: t("agent.connect.directTitle"), text: t("agent.connect.directText"), commands: ["npx -y @basketikun/canvas-agent@latest"] },
     ];
     const statusText = connectError ? t("agent.status.failed") : connected ? activity : enabled ? t("agent.status.connecting") : t("agent.status.disconnected");
     const statusColor = connectError ? "#dc2626" : connected ? "#16a34a" : enabled ? "#d97706" : theme.node.muted;

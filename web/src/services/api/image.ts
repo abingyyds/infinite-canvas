@@ -2,13 +2,14 @@ import axios from "axios";
 
 import i18n from "@/i18n";
 import { isGatewayModel } from "@/services/gateway-channel";
-import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile, normalizeImageDataUrlForUpload } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { blobToDataUrl, imageToDataUrl } from "@/services/image-storage";
+import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
 import type { ReferenceImage } from "@/types/image";
 
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
@@ -116,12 +117,6 @@ const QUALITY_ALIASES: Record<string, string> = {
     "2k": "medium",
     "4k": "high",
 };
-/** 分辨率档位对应的长边像素；4k 用 UHD 的 3840，和拆分前那批固定尺寸按钮保持一致 */
-const RESOLUTION_LONG_EDGE: Record<string, number> = {
-    "1k": 1024,
-    "2k": 2048,
-    "4k": 3840,
-};
 const DEFAULT_IMAGE_SHORT_SIDE = 1024;
 const IMAGE_SIZE_STEP = 16;
 const IMAGE_MIN_PIXELS = 655360;
@@ -149,55 +144,37 @@ function normalizeQuality(quality: string) {
     return QUALITY_BASE[normalized] ? normalized : undefined;
 }
 
-/** auto / 空值返回 undefined，表示不指定分辨率档位，由模型自己决定尺寸。 */
-export function normalizeResolution(resolution: string | undefined) {
-    const value = (resolution || "").trim().toLowerCase();
-    return RESOLUTION_LONG_EDGE[value] ? value : undefined;
-}
-
 /** Only "transparent" is forwarded; any other value (incl. empty) means keep the default opaque background. */
 function normalizeBackground(background: string | undefined) {
     return background?.trim().toLowerCase() === "transparent" ? "transparent" : undefined;
 }
 
-/**
- * 比例 + 分辨率档位 → 具体像素尺寸，如 "3840x2160"。
- * 档位定义为长边像素（4k 取 UHD 的 3840 而非 4096），auto 则按固定短边 1024 展开。
- * 设置面板的预览尺寸也走这里，避免界面显示和实际请求算出两个值。
- */
-export function resolveRatioSize(resolution: string | undefined, ratio: string): string {
+/** Map "quality + ratio" to an explicit pixel dimension like "3840x2160". */
+function resolveSize(quality: string | undefined, ratio: string): string {
     const parsedRatio = parseImageRatio(ratio);
+    const scale = quality === "high" ? "4k" : quality === "medium" || quality === "hd" ? "2k" : "1k";
+    const preset = imageSizePresets[scale][ratio];
+    if (preset) return preset;
+    const basePixels = quality ? QUALITY_BASE[quality] : undefined;
     const isLandscape = parsedRatio.width >= parsedRatio.height;
     const longRatio = isLandscape ? parsedRatio.width / parsedRatio.height : parsedRatio.height / parsedRatio.width;
-    const targetLongSide = RESOLUTION_LONG_EDGE[normalizeResolution(resolution) || ""];
-
     let longSide: number;
-    if (targetLongSide) {
-        // 长边先按档位取，再夹到像素上下限之间——例如 1:1 的 4k 会被压到 2880，否则超出像素上限
-        const minLongSide = ceilToStep(Math.sqrt(IMAGE_MIN_PIXELS * longRatio));
-        const maxLongSide = floorToStep(Math.min(Math.sqrt(IMAGE_MAX_PIXELS * longRatio), IMAGE_MAX_EDGE));
-        longSide = Math.min(Math.max(floorToStep(targetLongSide), minLongSide), maxLongSide);
+    let shortSide: number;
+
+    if (basePixels) {
+        const targetPixels = basePixels * basePixels;
+        const longSideRaw = Math.sqrt(targetPixels * longRatio);
+        longSide = Math.floor(longSideRaw / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
+        shortSide = Math.round(longSide / longRatio / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
     } else {
-        longSide = roundToStep(DEFAULT_IMAGE_SHORT_SIDE * longRatio);
+        shortSide = DEFAULT_IMAGE_SHORT_SIDE;
+        longSide = Math.round((shortSide * longRatio) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
     }
-    const shortSide = targetLongSide ? floorToStep(longSide / longRatio) : DEFAULT_IMAGE_SHORT_SIDE;
 
     const width = isLandscape ? longSide : shortSide;
     const height = isLandscape ? shortSide : longSide;
     validateImageSize(width, height);
     return `${width}x${height}`;
-}
-
-function ceilToStep(value: number) {
-    return Math.ceil(value / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-}
-
-function floorToStep(value: number) {
-    return Math.floor(value / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
-}
-
-function roundToStep(value: number) {
-    return Math.round(value / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
 }
 
 function parseRatioValue(value: string) {
@@ -230,7 +207,7 @@ function validateImageSize(width: number, height: number) {
     if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) throw new Error(apiText("imagePixelLimit"));
 }
 
-function resolveRequestSize(resolution: string | undefined, size: string) {
+function resolveRequestSize(quality: string | undefined, size: string) {
     const value = size.trim();
     if (!value || value.toLowerCase() === "auto") return undefined;
     const dimensions = parseImageDimensions(value);
@@ -238,7 +215,7 @@ function resolveRequestSize(resolution: string | undefined, size: string) {
         validateImageSize(dimensions.width, dimensions.height);
         return `${dimensions.width}x${dimensions.height}`;
     }
-    if (value.includes(":")) return resolveRatioSize(resolution, value);
+    if (value.includes(":")) return resolveSize(quality, value);
     throw new Error(apiText("invalidImageSizeFormat"));
 }
 
@@ -249,7 +226,7 @@ function resolveGeminiImageConfig(config: AiConfig) {
     const aspectRatio = value && value.toLowerCase() !== "auto" ? closestGeminiAspectRatio(ratio) : undefined;
     const imageSize = supportsGeminiImageSize(config.model) ? resolveGeminiImageSize(config.quality, dimensions) : undefined;
     const image = { ...(aspectRatio ? { aspectRatio } : {}), ...(imageSize ? { imageSize } : {}) };
-    return Object.keys(image).length ? { responseFormat: { image } } : {};
+    return Object.keys(image).length ? { imageConfig: image } : {};
 }
 
 function closestGeminiAspectRatio(value: string) {
@@ -266,6 +243,9 @@ function resolveGeminiImageSize(quality: string, dimensions: { width: number; he
     const normalizedQuality = normalizeQuality(quality);
     if (normalizedQuality) return GEMINI_IMAGE_SIZE_BY_QUALITY[normalizedQuality];
     if (!dimensions) return undefined;
+    const size = `${dimensions.width}x${dimensions.height}`;
+    const scale = inferMediaScale(size);
+    if (Object.values(imageSizePresets[scale]).includes(size)) return scale.toUpperCase();
     const edge = Math.max(dimensions.width, dimensions.height);
     if (edge <= 768) return "512";
     if (edge <= 1536) return "1K";
@@ -278,7 +258,7 @@ function supportsGeminiImageSize(model: string) {
     return value.includes("gemini-3") || value.includes("3.1") || value.includes("3-pro");
 }
 
-function resolveImageDataUrl(item: Record<string, unknown>) {
+function resolveImageSource(item: Record<string, unknown>) {
     if (typeof item.b64_json === "string" && item.b64_json) {
         return `data:image/png;base64,${item.b64_json}`;
     }
@@ -297,11 +277,10 @@ function parseImagePayload(payload: ImageApiResponse) {
         || (payload as Record<string, unknown>).images as Array<Record<string, unknown>> | undefined
         || (payload as Record<string, unknown>).results as Array<Record<string, unknown>> | undefined
         || [];
-    const images =
-        imageList
-            .map(resolveImageDataUrl)
-            .filter((value): value is string => Boolean(value))
-            .map((dataUrl) => ({ id: nanoid(), dataUrl }));
+    const images = imageList
+        .map(resolveImageSource)
+        .filter((value): value is string => Boolean(value))
+        .map((dataUrl) => ({ id: nanoid(), dataUrl }));
 
     if (images.length === 0) {
         // Check whether the response contains data in an unrecognized format.
@@ -349,7 +328,7 @@ function readApiErrorMessage(value: unknown): string {
 function readAxiosError(error: unknown, fallback: string) {
     if (axios.isCancel(error)) return apiText("requestCanceled");
     if (axios.isAxiosError(error)) {
-        if (!error.response && error.code === "ERR_NETWORK") return apiText("corsRequired");
+        if (!error.response && error.code === "ERR_NETWORK") return apiText("requestFailed");
         const responseData = error.response?.data;
         // Prefer the API error from the response body.
         const apiMsg = readApiErrorMessage(responseData);
@@ -401,8 +380,8 @@ function geminiModelName(model: string) {
 
 function geminiApiUrl(config: Pick<AiConfig, "baseUrl" | "model">, action?: "generateContent" | "streamGenerateContent") {
     const baseUrl = geminiBaseUrl(config);
-    if (!action) return `${baseUrl}/models`;
-    return `${baseUrl}/models/${encodeURIComponent(geminiModelName(config.model))}:${action}`;
+    if (!action) return withLocalProxy(`${baseUrl}/models`);
+    return withLocalProxy(`${baseUrl}/models/${encodeURIComponent(geminiModelName(config.model))}:${action}`);
 }
 
 function geminiHeaders(config: Pick<AiConfig, "apiKey">) {
@@ -827,8 +806,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     const script = resolveModelScript(config, config.model || config.imageModel);
     if (script) {
         const quality = normalizeQuality(config.quality);
-        const resolution = normalizeResolution(config.resolution);
-        const requestSize = resolveRequestSize(resolution, config.size);
+        const requestSize = resolveRequestSize(quality, config.size);
         const background = normalizeBackground(config.background);
         try {
             const result = await runModelPlugin({
@@ -837,7 +815,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 config: requestConfig,
                 prompt: withSystemPrompt(requestConfig, prompt),
                 images: [],
-                params: { size: requestSize, quality, resolution, count: n, ...(background ? { background } : {}) },
+                params: { size: requestSize, quality, count: n, ...(background ? { background } : {}) },
                 signal: options?.signal,
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
@@ -862,8 +840,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
         }
     }
     const quality = normalizeQuality(config.quality);
-    const resolution = normalizeResolution(config.resolution);
-    const requestSize = resolveRequestSize(resolution, config.size);
+    const requestSize = resolveRequestSize(quality, config.size);
     const background = normalizeBackground(config.background);
     try {
         const response = await axios.post<ImageApiResponse>(
@@ -882,7 +859,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 signal: options?.signal,
             },
         );
-        const images = parseImagePayload(response.data);
+        const images = await parseImagePayload(response.data);
         refreshGatewayUser(config, config.model || config.imageModel);
         return images;
     } catch (error) {
@@ -890,15 +867,14 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     }
 }
 
-export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions) {
+export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
     const script = resolveModelScript(config, config.model || config.imageModel);
     if (script) {
         const quality = normalizeQuality(config.quality);
-        const resolution = normalizeResolution(config.resolution);
-        const requestSize = resolveRequestSize(resolution, config.size);
+        const requestSize = resolveRequestSize(quality, config.size);
         const background = normalizeBackground(config.background);
         const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
         try {
@@ -908,7 +884,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                 config: requestConfig,
                 prompt: withSystemPrompt(requestConfig, requestPrompt),
                 images: refs,
-                params: { size: requestSize, quality, resolution, count: n, ...(background ? { background } : {}) },
+                params: { size: requestSize, quality, count: n, ...(background ? { background } : {}) },
                 signal: options?.signal,
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
@@ -917,7 +893,6 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         }
     }
     if (requestConfig.apiFormat === "gemini") {
-        if (mask) throw new Error(apiText("geminiMaskUnsupported"));
         try {
             return await requestGeminiImages(requestConfig, requestPrompt, references, n, options);
         } catch (error) {
@@ -926,7 +901,6 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
 
     if (isChatCompletionImageModel(requestConfig.model)) {
-        if (mask) throw new Error(apiText("maskModelUnsupported"));
         try {
             const images = await requestChatImages(requestConfig, withSystemPrompt(requestConfig, requestPrompt), references, n, options);
             refreshGatewayUser(config, config.model || config.imageModel);
@@ -937,8 +911,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
 
     const quality = normalizeQuality(config.quality);
-    const resolution = normalizeResolution(config.resolution);
-    const requestSize = resolveRequestSize(resolution, config.size);
+    const requestSize = resolveRequestSize(quality, config.size);
     const background = normalizeBackground(config.background);
     const formData = new FormData();
     formData.set("model", requestConfig.model);
@@ -963,17 +936,12 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
     const normalizedReferences = await Promise.all(referenceDataUrls.map((dataUrl) => normalizeImageDataUrlForUpload(dataUrl || "")));
     const files = references.map((image, index) => dataUrlToFile({ ...image, name: pngFileName(image.name, `reference-${index + 1}.png`), type: "image/png", dataUrl: normalizedReferences[index]?.dataUrl || "" }));
-    files.forEach((file) => formData.append("image", file));
-    let normalizedMaskUrl = "";
-    if (mask) {
-        const firstReference = normalizedReferences[0];
-        normalizedMaskUrl = (await normalizeImageDataUrlForUpload(mask.dataUrl, firstReference ? { targetWidth: firstReference.width, targetHeight: firstReference.height } : undefined)).dataUrl;
-        formData.set("mask", dataUrlToFile({ ...mask, name: pngFileName(mask.name, "mask.png"), type: "image/png", dataUrl: normalizedMaskUrl }));
-    }
+    const imageField = files.length > 1 ? "image[]" : "image";
+    files.forEach((file) => formData.append(imageField, file));
 
     try {
         const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal });
-        const images = parseImagePayload(response.data);
+        const images = await parseImagePayload(response.data);
         refreshGatewayUser(config, config.model || config.imageModel);
         return images;
     } catch (error) {
@@ -984,7 +952,6 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                 requestConfig,
                 { prompt: requestPrompt, n, quality, size: requestSize, background },
                 normalizedReferences.map((image) => image.dataUrl),
-                normalizedMaskUrl || undefined,
                 message,
                 options,
             );
@@ -1004,7 +971,6 @@ async function requestEditJsonFallback(
     config: AiConfig,
     params: { prompt: string; n: number; quality?: string; size?: string; background?: string },
     images: string[],
-    mask: string | undefined,
     previousMessage: string,
     options?: RequestOptions,
 ) {
@@ -1016,7 +982,6 @@ async function requestEditJsonFallback(
                 prompt: withSystemPrompt(config, params.prompt),
                 n: params.n,
                 images,
-                ...(mask ? { mask } : {}),
                 ...(params.quality ? { quality: params.quality } : {}),
                 ...(params.size ? { size: params.size } : {}),
                 ...(params.background ? { background: params.background } : {}),

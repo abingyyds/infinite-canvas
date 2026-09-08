@@ -35,6 +35,10 @@ const sizeOptions = [
 ];
 
 const secondOptions = [6, 10, 12, 16, 20];
+const videoModeOptions = [
+    { value: "frames", labelKey: "frames" },
+    { value: "reference", labelKey: "reference" },
+];
 
 export const videoResolutionOptions = resolutionOptions.map((item) => ({ value: item.value, label: item.label }));
 export const videoSizeOptions = sizeOptions.map((item) => ({
@@ -44,12 +48,13 @@ export const videoSizeOptions = sizeOptions.map((item) => ({
     },
 }));
 export const videoSecondOptions = secondOptions.map((value) => String(value));
+export const videoSecondsRange = { min: 1, max: 20 };
 
 type VideoSettingsPanelProps = {
     config: AiConfig;
     /** 当前生成用的视频模型；工作台里它和 config.model 不同，必须显式传入。 */
     model?: string;
-    onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark", value: string) => void;
+    onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark" | "videoMode", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     className?: string;
@@ -72,6 +77,7 @@ export function VideoSettingsPanel({ config, model: selectedModel, onConfigChang
     const currentSizeOptions = isGrokPreview ? sizeOptions.filter((item) => item.value !== "auto") : sizeOptions;
     const currentSecondOptions = isGrokPreview ? grokPreviewDurationOptions : secondOptions;
     const maxSeconds = isGrokPreview ? 15 : 20;
+    const videoMode = normalizeVideoModeValue(config.videoMode);
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 720));
         onConfigChange("size", `${key === "width" ? next : dimensions.width}x${key === "height" ? next : dimensions.height}`);
@@ -130,6 +136,17 @@ export function VideoSettingsPanel({ config, model: selectedModel, onConfigChang
                         <NumberInput value={seconds} min={1} max={maxSeconds} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
                     </div>
                 </SettingGroup>
+                {isGrokImagineVideoModel(model) ? null : (
+                    <SettingGroup title={t("settingsPanels.video.mode")} color={theme.node.muted}>
+                        <div className="grid grid-cols-2 gap-2.5">
+                            {videoModeOptions.map((item) => (
+                                <OptionPill key={item.value} selected={videoMode === item.value} theme={theme} onClick={() => onConfigChange("videoMode", item.value)}>
+                                    {t(`settingsPanels.video.modes.${item.labelKey}`)}
+                                </OptionPill>
+                            ))}
+                        </div>
+                    </SettingGroup>
+                )}
             </div>
         </ImageSettingsTheme>
     );
@@ -216,6 +233,14 @@ export function videoSizeLabel(value: string) {
 export function videoSecondsLabel(value: string) {
     if (String(value).trim() === "-1") return i18n.t("settingsPanels.video.smart");
     return `${value || "6"}s`;
+}
+
+export function videoModeLabel(value: string) {
+    return i18n.t(`settingsPanels.video.modes.${normalizeVideoModeValue(value)}`);
+}
+
+export function normalizeVideoModeValue(value: string | undefined) {
+    return value === "reference" ? "reference" : "frames";
 }
 
 export function normalizeVideoSizeValue(value: string) {
