@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { isUnifiedJsonVideoModel, unifiedVideoDuration, videoCreatePath } from "./video";
+import { isUnifiedJsonVideoModel, unifiedVideoDuration, unwrapEnvelope, videoCreatePath } from "./video";
 import { isSeedanceVideoModel } from "@/lib/seedance-video";
 
 const xai = { baseUrl: "https://api.x.ai" };
@@ -62,5 +62,26 @@ describe("unified JSON video duration", () => {
     it("falls back to 6 seconds for adaptive or empty input", () => {
         expect(unifiedVideoDuration("-1")).toBe(6);
         expect(unifiedVideoDuration("")).toBe(6);
+    });
+});
+
+describe("task response envelope", () => {
+    it("unwraps a real envelope", () => {
+        expect(unwrapEnvelope({ code: 0, data: { id: "task_1" } }, "empty")).toEqual({ id: "task_1" });
+    });
+
+    it("keeps a flat task body that merely carries code: 0", () => {
+        // 商家的轮询响应把任务字段平铺在 code 同级，没有 data 信封
+        const flat = { code: 0, success: true, task_id: "vid_1", status: "processing", video_url: null };
+        expect(unwrapEnvelope(flat, "empty")).toEqual(flat);
+    });
+
+    it("still rejects an envelope with no payload", () => {
+        expect(() => unwrapEnvelope({ code: 0, data: null }, "empty")).toThrow("empty");
+        expect(() => unwrapEnvelope({ code: 0 }, "empty")).toThrow("empty");
+    });
+
+    it("still surfaces a non-zero code as an error", () => {
+        expect(() => unwrapEnvelope({ code: 400, message: "bad params" }, "empty")).toThrow("bad params");
     });
 });

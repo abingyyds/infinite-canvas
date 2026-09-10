@@ -775,12 +775,16 @@ function isFailedVideoStatus(status: string) {
     return status === "failed" || status === "failure" || status === "error" || status === "expired" || status === "cancelled" || status === "canceled";
 }
 
-function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
+const envelopeKeys = new Set(["code", "data", "msg", "message", "success"]);
+
+export function unwrapEnvelope<T>(payload: ApiEnvelope<T>, emptyMessage: string): T {
     if (!payload) throw new Error(emptyMessage);
     if (typeof payload === "object" && "code" in payload && payload.code !== undefined) {
         if (payload.code !== 0 && payload.code !== "0") throw new Error(readApiErrorMessage(payload) || apiText("requestFailed"));
-        if (!payload.data) throw new Error(emptyMessage);
-        return payload.data;
+        if (payload.data) return payload.data;
+        // 有的渠道把任务字段平铺在 code 同级，没有 data 信封
+        if (Object.keys(payload).some((key) => !envelopeKeys.has(key))) return payload as T;
+        throw new Error(emptyMessage);
     }
     return payload as T;
 }
