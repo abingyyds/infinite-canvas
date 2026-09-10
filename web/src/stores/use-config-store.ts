@@ -483,11 +483,36 @@ function uniqueModelOptions(models: string[]) {
     return Array.from(new Set((models || []).map((model) => model.trim()).filter(Boolean)));
 }
 
+/**
+ * 只认地址里的版本段，丢掉它后面多余的路径。用户常把整条端点地址粘进来，或多打一层 /v1，
+ * 只判断结尾会拼出 /v1/v1/models 这种打不通的地址。与后端 normalizeModelChannelBaseURL 保持一致。
+ */
+export function normalizeApiBaseUrl(baseUrl: string) {
+    const trimmed = baseUrl.trim().replace(/\/+$/, "");
+    if (!/^https?:\/\//i.test(trimmed)) return trimmed;
+    let parsed: URL;
+    try {
+        parsed = new URL(trimmed);
+    } catch {
+        return trimmed;
+    }
+    const path = parsed.pathname.replace(/\/+$/, "");
+    const lowerPath = path.toLowerCase();
+    for (const prefix of ["/api/plan/v3", "/api/v3", "/v1"]) {
+        const index = lowerPath.indexOf(prefix);
+        if (index < 0) continue;
+        const end = index + prefix.length;
+        if (lowerPath.length !== end && lowerPath[end] !== "/") continue;
+        return `${parsed.origin}${path.slice(0, end)}`;
+    }
+    return `${parsed.origin}${path}`;
+}
+
 export function buildApiUrl(baseUrl: string, path: string) {
-    const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+    const normalizedBaseUrl = normalizeApiBaseUrl(baseUrl);
     const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
-    const apiBaseUrl = lowerBaseUrl.endsWith("/v1") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
-    return withLocalProxy(`${apiBaseUrl}${path}`);
+    const versioned = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3");
+    return withLocalProxy(`${versioned ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`}${path}`);
 }
 
 export function normalizeLocalProxyUrl(value: string) {
