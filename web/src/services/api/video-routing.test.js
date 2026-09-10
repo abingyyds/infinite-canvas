@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { isUnifiedJsonVideoModel, unifiedVideoDuration, unwrapEnvelope, videoCreatePath } from "./video";
+import { isUnifiedJsonVideoModel, unifiedVideoDuration, unwrapEnvelope, videoCreatePath, videoPollTimedOut } from "./video";
 import { isSeedanceVideoModel } from "@/lib/seedance-video";
 
 const xai = { baseUrl: "https://api.x.ai" };
@@ -83,5 +83,19 @@ describe("task response envelope", () => {
 
     it("still surfaces a non-zero code as an error", () => {
         expect(() => unwrapEnvelope({ code: 400, message: "bad params" }, "empty")).toThrow("bad params");
+    });
+});
+
+describe("video poll budget", () => {
+    it("keeps polling well past the old ~5 minute ceiling", () => {
+        const startedAt = 1_000_000;
+        // 商家标称 15 分钟出片，7 分钟就放弃会让用户白付一次任务的钱
+        expect(videoPollTimedOut(startedAt, startedAt + 7 * 60_000)).toBe(false);
+        expect(videoPollTimedOut(startedAt, startedAt + 15 * 60_000)).toBe(false);
+    });
+
+    it("does give up eventually", () => {
+        const startedAt = 1_000_000;
+        expect(videoPollTimedOut(startedAt, startedAt + 25 * 60_000)).toBe(true);
     });
 });
