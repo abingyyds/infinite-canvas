@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { isUnifiedJsonVideoModel, videoCreatePath } from "./video";
+import { isUnifiedJsonVideoModel, unifiedVideoDuration, videoCreatePath } from "./video";
 import { isSeedanceVideoModel } from "@/lib/seedance-video";
 
 const xai = { baseUrl: "https://api.x.ai" };
@@ -49,5 +49,18 @@ describe("unified JSON video routing", () => {
     it("leaves unrelated video models off the unified branch", () => {
         expect(isUnifiedJsonVideoModel("sora-2")).toBe(false);
         expect(isUnifiedJsonVideoModel("grok-imagine-video")).toBe(false);
+    });
+});
+
+describe("unified JSON video duration", () => {
+    it("sends the chosen seconds untouched; each gateway model has its own range", () => {
+        expect(unifiedVideoDuration("30")).toBe(30);
+        expect(unifiedVideoDuration("4")).toBe(4);
+        expect(unifiedVideoDuration("12.7")).toBe(12);
+    });
+
+    it("falls back to 6 seconds for adaptive or empty input", () => {
+        expect(unifiedVideoDuration("-1")).toBe(6);
+        expect(unifiedVideoDuration("")).toBe(6);
     });
 });

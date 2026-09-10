@@ -296,12 +296,11 @@ async function createUnifiedVideoTask(config: AiConfig, selectedModel: string, r
     }
     const model = config.model;
     const path = "/videos";
-    const duration = normalizeSeedanceDuration(config.videoSeconds);
     const images = await Promise.all(references.slice(0, SEEDANCE_REFERENCE_LIMITS.images).map((image) => resolveGrokImageUrl(config, remote, image)));
     const payload = {
         model,
         prompt,
-        duration: duration === -1 ? 6 : duration,
+        duration: unifiedVideoDuration(config.videoSeconds),
         metadata: {
             ratio: normalizeSeedanceRatio(config.size),
             resolution: normalizeSeedanceResolution(config.vquality, model),
@@ -699,6 +698,12 @@ function resolveVideoMode(mode: string | undefined, imageCount: number) {
 function normalizeVideoSeconds(value: string) {
     const seconds = Math.floor(Number(value) || 6);
     return String(Math.max(1, Math.min(20, seconds)));
+}
+
+/** 网关原生视频模型（seedance / veo / omni）各有各的时长范围，这里不钳制，交给上游校验；-1 或空回落到 6。 */
+export function unifiedVideoDuration(value: string) {
+    const seconds = Math.floor(Number(value));
+    return seconds > 0 ? seconds : 6;
 }
 
 function normalizeVideoSize(value: string, resolution?: string) {
