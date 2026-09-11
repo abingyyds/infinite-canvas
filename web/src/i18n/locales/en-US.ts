@@ -211,7 +211,7 @@ export default {
         invalidParams: "Invalid video generation parameters",
         busy: "The Video Studio is already running a task",
         generated: "Video generated",
-        timeout: "Video generation timed out. Try again later.",
+        timeout: "Video generation timed out while waiting. The task may still be running, so check back later; submitting again is billed again.",
         resultTitle: "Generated video",
         source: "Video Studio",
         empty: "No video generated yet",

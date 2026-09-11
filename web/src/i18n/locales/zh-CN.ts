@@ -211,7 +211,7 @@ export default {
         invalidParams: "视频生成参数无效",
         busy: "视频工作台已有任务正在运行",
         generated: "视频已生成",
-        timeout: "视频生成超时，请稍后重试",
+        timeout: "视频生成等待超时，任务可能仍在生成，稍后回来查看即可；重新提交会再计一次费",
         resultTitle: "生成视频",
         source: "视频创作台",
         empty: "还没有生成视频",
