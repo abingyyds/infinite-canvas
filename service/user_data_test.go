@@ -437,3 +437,36 @@ func TestReadCanvasSnapshotExposesRevisions(t *testing.T) {
 		t.Errorf("revisions = %v, want an entry for b", payload.Revisions)
 	}
 }
+
+// AutoMigrate 给已有表加 revision 列时，历史行的值是 NULL 而不是 0，而 SQL 里 NULL = 0 不成立。
+// 这些行一旦被当成冲突，客户端拿回的 base 仍是 0（NULL 扫进 int64 就是 0），重试永远匹配不上。
+func TestSaveCanvasProjectsAcceptsRowsMigratedWithNullRevision(t *testing.T) {
+	user := model.AuthUser{ID: "user-null-revision"}
+	seedCanvasProjects(t, user.ID, "a")
+	db, err := repository.DB()
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	if err := db.Exec("UPDATE user_canvas_projects SET revision = NULL WHERE user_id = ? AND project_id = ?", user.ID, "a").Error; err != nil {
+		t.Fatalf("simulate migrated row: %v", err)
+	}
+
+	result, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{
+		Projects:      []json.RawMessage{json.RawMessage(`{"id":"a","title":"迁移过来的行"}`)},
+		KeepIDs:       []string{"a"},
+		DeleteIDs:     &[]string{},
+		BaseRevisions: map[string]int64{"a": 0},
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if len(result.Conflicts) != 0 {
+		t.Fatalf("conflicts = %v, want none: a NULL revision means nobody has written the row yet", result.Conflicts)
+	}
+	if got := canvasData(t, user.ID, "a"); got != `{"id":"a","title":"迁移过来的行"}` {
+		t.Errorf("stored = %s, want the save to have landed", got)
+	}
+	if got := canvasRevision(t, user.ID, "a"); got != 1 {
+		t.Errorf("revision = %d, want 1", got)
+	}
+}

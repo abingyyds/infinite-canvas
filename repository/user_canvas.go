@@ -143,13 +143,15 @@ func writeUserCanvasProjects(tx *gorm.DB, userID string, write CanvasWrite) (Can
 // common case is a single statement; only when it matches nothing do we look at whether the row
 // is missing (a new project) or was written by someone else (a conflict).
 func writeOneCanvasProject(tx *gorm.DB, userID string, row model.UserCanvasProject, base int64) (int64, *model.UserCanvasProject, error) {
+	// COALESCE：AutoMigrate 给已有表加 revision 列时不会回填，历史行是 NULL 而不是 0，
+	// 而 NULL = 0 在 SQL 里不成立。少了它，升级前就存在的画布会被永远判成冲突。
 	update := tx.Model(&model.UserCanvasProject{}).
-		Where("user_id = ? AND project_id = ? AND revision = ?", userID, row.ProjectID, base).
+		Where("user_id = ? AND project_id = ? AND COALESCE(revision, 0) = ?", userID, row.ProjectID, base).
 		Updates(map[string]any{
 			"sort_index": row.SortIndex,
 			"data":       row.Data,
 			"updated_at": row.UpdatedAt,
-			"revision":   gorm.Expr("revision + 1"),
+			"revision":   gorm.Expr("COALESCE(revision, 0) + 1"),
 		})
 	if update.Error != nil {
 		return 0, nil, update.Error
