@@ -118,23 +118,37 @@ export function hasResumableVideoTask(node: CanvasNodeData) {
     return node.type === CanvasNodeType.Video && Boolean(node.metadata?.videoTaskId) && !node.metadata?.content;
 }
 
+/** 还能接着轮询的图片槽：仍在生成、带任务号、还没拿到图。 */
+export function resumableImageSlots(node: CanvasNodeData) {
+    return (node.metadata?.images || []).filter((image) => image.status === "loading" && Boolean(image.taskId) && !image.content);
+}
+
+export function hasResumableImageTask(node: CanvasNodeData) {
+    // 失败的节点也留着任务号（方便手动重查），所以这里必须看状态，否则会去续一个早已结束的任务
+    if (node.metadata?.status !== "loading") return false;
+    if (node.metadata?.imageTaskId && !node.metadata?.content) return true;
+    return resumableImageSlots(node).length > 0;
+}
+
 export function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
-    return nodes.map((node) =>
-        node.metadata?.status === "loading"
-            ? hasResumableVideoTask(node)
-                ? node
-                : {
-                      ...node,
-                      metadata: {
-                          ...node.metadata,
-                          status: "error" as const,
-                          errorDetails: i18n.t("canvas.generation.interrupted"),
-                          images: node.metadata.images?.map((image) => (image.status === "loading" ? { ...image, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : image)),
-                          texts: node.metadata.texts?.map((text) => (text.status === "loading" ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : text)),
-                      },
-                  }
-            : node,
-    );
+    return nodes.map((node) => {
+        if (node.metadata?.status !== "loading") return node;
+        if (hasResumableVideoTask(node) || (node.metadata?.imageTaskId && !node.metadata?.content)) return node;
+        // 同一节点里带任务号的槽还能续，只有剩下那些才算中断
+        const resumable = new Set(resumableImageSlots(node).map((image) => image.id));
+        const images = node.metadata.images?.map((image) => (image.status === "loading" && !resumable.has(image.id) ? { ...image, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : image));
+        if (resumable.size) return { ...node, metadata: { ...node.metadata, images } };
+        return {
+            ...node,
+            metadata: {
+                ...node.metadata,
+                status: "error" as const,
+                errorDetails: i18n.t("canvas.generation.interrupted"),
+                images,
+                texts: node.metadata.texts?.map((text) => (text.status === "loading" ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : text)),
+            },
+        };
+    });
 }
 
 export function isGenerationCanceled(error: unknown) {

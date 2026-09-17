@@ -6,9 +6,12 @@ import "testing"
 func TestNewRegistersRoutes(t *testing.T) {
 	engine := New()
 	want := map[string]bool{
-		"POST /api/canvas/projects":   false,
-		"POST /api/user-data/:domain": false,
-		"GET /api/user-data/:domain":  false,
+		"POST /api/canvas/projects":             false,
+		"POST /api/user-data/:domain":           false,
+		"GET /api/user-data/:domain":            false,
+		"POST /api/v1/images/generations/async": false,
+		"POST /api/v1/images/edits/async":       false,
+		"GET /api/v1/tasks/:id":                 false,
 	}
 	for _, route := range engine.Routes() {
 		key := route.Method + " " + route.Path

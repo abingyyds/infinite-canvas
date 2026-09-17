@@ -74,7 +74,8 @@ async function apiRequest<T>(config: { url: string; method: "GET" | "POST" | "DE
 
     const payload = result as ApiResponse<T>;
     if (response.status < 200 || response.status >= 300 || payload.code !== 0) {
-        throw new Error(payload.msg || "请求失败");
+        // 带上状态码和 data：像 409 冲突这种要让调用方拿到响应体才能处理，只给一句 msg 不够。
+        throw Object.assign(new Error(payload.msg || "请求失败"), { status: response.status, data: payload.data });
     }
 
     return payload.data;

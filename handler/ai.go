@@ -37,6 +37,16 @@ func AIImagesEdits(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/images/edits")
 }
 
+// 异步门面：网关一律先回 202 + 任务号，上游只支持同步时由它代持长连接。图片结果随后归档到
+// 对象存储，轮询拿回的是链接而不是 base64。
+func AIImagesGenerationsAsync(w http.ResponseWriter, r *http.Request) {
+	proxyAIRequest(w, r, "/images/generations/async")
+}
+
+func AIImagesEditsAsync(w http.ResponseWriter, r *http.Request) {
+	proxyAIRequest(w, r, "/images/edits/async")
+}
+
 func AIChatCompletions(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/chat/completions")
 }
@@ -55,6 +65,11 @@ func AIVideoGenerations(w http.ResponseWriter, r *http.Request) {
 
 func AIVideoGenerationsLegacy(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/video/generations")
+}
+
+// AITask 是图片和视频任务统一的查询入口，渠道靠 query 里的 model 选。
+func AITask(w http.ResponseWriter, r *http.Request, id string) {
+	proxyAIGetRequest(w, r, "/tasks/"+id)
 }
 
 func AIVideo(w http.ResponseWriter, r *http.Request, id string) {

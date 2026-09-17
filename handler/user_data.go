@@ -60,5 +60,11 @@ func SaveUserCanvasProjects(w http.ResponseWriter, r *http.Request) {
 		FailError(w, err)
 		return
 	}
+	if len(result.Conflicts) > 0 {
+		// 409 而不是 200：客户端要靠状态码分流去做合并重试，HTTP 层也才看得见冲突率。
+		// 没冲突的画布这次已经写进去了，result 里照样带着它们的新版本号。
+		writeJSONStatus(w, http.StatusConflict, response{Code: 1, Data: result, Msg: "画布已在别处更新"})
+		return
+	}
 	OK(w, result)
 }

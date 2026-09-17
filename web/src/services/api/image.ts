@@ -11,6 +11,7 @@ import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { blobToDataUrl, imageToDataUrl } from "@/services/image-storage";
 import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
 import type { ReferenceImage } from "@/types/image";
+import { asyncImageTaskFailure, delay, imagePollTimedOut, imagesFromTask, isAsyncFacadeUnsupported, resolveTaskMediaUrl, type MediaTask } from "./image-async";
 
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
@@ -103,7 +104,8 @@ type GeminiPayload = {
     promptFeedback?: { blockReason?: string };
 };
 type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseToolCall[]; error?: string };
-type RequestOptions = { signal?: AbortSignal };
+// onTaskCreated 让调用方在任务刚受理时就把任务号落进画布，刷新后才接得上。
+type RequestOptions = { signal?: AbortSignal; onTaskCreated?: (taskId: string) => void };
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -800,6 +802,59 @@ async function requestChatImages(config: AiConfig, prompt: string, references: R
     return (await Promise.all(requests)).flat();
 }
 
+// 记下哪些渠道没有异步门面，避免每次生图都先白跑一次 404。
+const asyncImageUnsupported = new Set<string>();
+const IMAGE_POLL_INTERVAL_MS = 2500;
+
+function asyncFacadeKey(config: AiConfig) {
+    return `${config.baseUrl}|${config.model}`;
+}
+
+/**
+ * 先走网关的异步门面：它一律先回 202 + 任务号，上游只支持同步时由网关代持那条长连接，
+ * 所以浏览器这边不会再有一个挂十几分钟的请求。结果归档到对象存储后拿回的是链接，
+ * 画布里存的就不再是几 MB 的 base64。网关或渠道不支持时返回 null，调用方退回同步路径。
+ */
+async function tryAsyncImageRequest(config: AiConfig, path: string, body: unknown, contentType: string | undefined, options?: RequestOptions) {
+    if (asyncImageUnsupported.has(asyncFacadeKey(config))) return null;
+    let taskId = "";
+    try {
+        const response = await axios.post<MediaTask>(aiApiUrl(config, path), body, { headers: aiHeaders(config, contentType), signal: options?.signal });
+        taskId = (response.data?.id || "").trim();
+    } catch (error) {
+        if (axios.isCancel(error) || options?.signal?.aborted) throw error;
+        if (!isAsyncFacadeUnsupported(error)) throw error;
+        asyncImageUnsupported.add(asyncFacadeKey(config));
+        return null;
+    }
+    if (!taskId) {
+        asyncImageUnsupported.add(asyncFacadeKey(config));
+        return null;
+    }
+    options?.onTaskCreated?.(taskId);
+    return waitForImageTask(config, taskId, options);
+}
+
+/** 也用于刷新后接着轮询一个已经受理的任务。 */
+export async function waitForImageTask(config: AiConfig, taskId: string, options?: RequestOptions) {
+    const startedAt = Date.now();
+    while (true) {
+        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        const response = await axios.get<MediaTask>(aiApiUrl(config, `/tasks/${encodeURIComponent(taskId)}`), {
+            headers: aiHeaders(config),
+            params: { model: config.model },
+            signal: options?.signal,
+        });
+        const task = response.data;
+        if (task?.status === "completed") return imagesFromTask(task, config.baseUrl);
+        const failure = asyncImageTaskFailure(task);
+        if (failure) throw new Error(failure);
+        // 超时不代表任务失败，网关那边还在跑，重新提交会再计一次费
+        if (imagePollTimedOut(startedAt, Date.now())) throw new Error(apiText("imageTimeout"));
+        await delay(IMAGE_POLL_INTERVAL_MS, options?.signal);
+    }
+}
+
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
@@ -842,23 +897,25 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
     const background = normalizeBackground(config.background);
+    const generationBody = {
+        model: requestConfig.model,
+        prompt: withSystemPrompt(requestConfig, prompt),
+        n,
+        ...(quality ? { quality } : {}),
+        ...(requestSize ? { size: requestSize } : {}),
+        ...(background ? { background } : {}),
+        ...(supportsImageFormatParams(requestConfig.model) ? { response_format: "b64_json", output_format: IMAGE_OUTPUT_FORMAT } : {}),
+    };
     try {
-        const response = await axios.post<ImageApiResponse>(
-            aiApiUrl(requestConfig, "/images/generations"),
-            {
-                model: requestConfig.model,
-                prompt: withSystemPrompt(requestConfig, prompt),
-                n,
-                ...(quality ? { quality } : {}),
-                ...(requestSize ? { size: requestSize } : {}),
-                ...(background ? { background } : {}),
-                ...(supportsImageFormatParams(requestConfig.model) ? { response_format: "b64_json", output_format: IMAGE_OUTPUT_FORMAT } : {}),
-            },
-            {
-                headers: aiHeaders(requestConfig, "application/json"),
-                signal: options?.signal,
-            },
-        );
+        const asyncImages = await tryAsyncImageRequest(requestConfig, "/images/generations/async", generationBody, "application/json", options);
+        if (asyncImages) {
+            refreshGatewayUser(config, config.model || config.imageModel);
+            return asyncImages;
+        }
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/generations"), generationBody, {
+            headers: aiHeaders(requestConfig, "application/json"),
+            signal: options?.signal,
+        });
         const images = await parseImagePayload(response.data);
         refreshGatewayUser(config, config.model || config.imageModel);
         return images;
@@ -940,6 +997,11 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     files.forEach((file) => formData.append(imageField, file));
 
     try {
+        const asyncImages = await tryAsyncImageRequest(requestConfig, "/images/edits/async", formData, undefined, options);
+        if (asyncImages) {
+            refreshGatewayUser(config, config.model || config.imageModel);
+            return asyncImages;
+        }
         const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal });
         const images = await parseImagePayload(response.data);
         refreshGatewayUser(config, config.model || config.imageModel);

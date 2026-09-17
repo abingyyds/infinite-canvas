@@ -36,7 +36,9 @@ type CanvasStore = {
     renameProject: (id: string, title: string) => void;
     deleteProjects: (ids: string[]) => void;
     replaceProjects: (projects: CanvasProject[], deletedProjects?: CanvasDeletedProject[]) => void;
-    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">>) => void;
+    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo">>) => void;
+    // 视口是纯视图状态，刷新 updatedAt 会让只是看过画布的一端在同步合并里赢过真正有新内容的一端。
+    updateProjectViewport: (id: string, viewport: ViewportTransform) => void;
 };
 
 const initialViewport: ViewportTransform = { x: 0, y: 0, k: 1 };
@@ -128,6 +130,10 @@ export const useCanvasStore = create<CanvasStore>()(
             updateProject: (id, patch) =>
                 set((state) => ({
                     projects: state.projects.map((project) => (project.id === id ? { ...project, ...patch, updatedAt: new Date().toISOString() } : project)),
+                })),
+            updateProjectViewport: (id, viewport) =>
+                set((state) => ({
+                    projects: state.projects.map((project) => (project.id === id ? { ...project, viewport } : project)),
                 })),
         }),
         {

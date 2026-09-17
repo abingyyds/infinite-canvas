@@ -18,4 +18,7 @@ type UserCanvasProject struct {
 	SortIndex int    `json:"sortIndex"`
 	Data      string `json:"data" gorm:"type:text"`
 	UpdatedAt string `json:"updatedAt"`
+	// 乐观锁版本号。客户端保存时回传它读到的版本，对不上就是有人先写过，拒绝覆盖。
+	// 行插入时置 1；0 属于加列之前的历史行，当作"没人动过"处理。
+	Revision int64 `json:"revision"`
 }

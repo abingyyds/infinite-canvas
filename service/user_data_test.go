@@ -37,7 +37,7 @@ func seedCanvasProjects(t *testing.T, userID string, ids ...string) {
 			UpdatedAt: "2026-01-01T00:00:00Z",
 		})
 	}
-	if err := repository.SaveUserCanvasProjects(userID, rows, ids); err != nil {
+	if _, err := repository.SaveUserCanvasProjects(userID, repository.CanvasWrite{Changed: rows, KeepIDs: ids}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 }
@@ -161,7 +161,7 @@ func TestReadCanvasSnapshotMigratesLegacyBlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	want := `{"projects":[{"id":"a","title":"A"},{"id":"b","title":"B"}]}`
+	want := `{"projects":[{"id":"a","title":"A"},{"id":"b","title":"B"}],"revisions":{"a":0,"b":0}}`
 	if string(snapshot.Data) != want {
 		t.Errorf("data = %s, want %s", snapshot.Data, want)
 	}
@@ -249,7 +249,7 @@ func TestReadCanvasSnapshotPicksChronologicallyLatestUpdatedAt(t *testing.T) {
 		{UserID: user.ID, ProjectID: "a", SortIndex: 0, Data: `{"id":"a"}`, UpdatedAt: "2026-08-20T16:00:00+08:00"},
 		{UserID: user.ID, ProjectID: "b", SortIndex: 1, Data: `{"id":"b"}`, UpdatedAt: "2026-08-20T09:00:00Z"},
 	}
-	if err := repository.SaveUserCanvasProjects(user.ID, rows, []string{"a", "b"}); err != nil {
+	if _, err := repository.SaveUserCanvasProjects(user.ID, repository.CanvasWrite{Changed: rows, KeepIDs: []string{"a", "b"}}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -259,5 +259,181 @@ func TestReadCanvasSnapshotPicksChronologicallyLatestUpdatedAt(t *testing.T) {
 	}
 	if snapshot.UpdatedAt != "2026-08-20T09:00:00Z" {
 		t.Fatalf("updatedAt = %q, want 2026-08-20T09:00:00Z", snapshot.UpdatedAt)
+	}
+}
+
+func canvasRevision(t *testing.T, userID string, projectID string) int64 {
+	t.Helper()
+	for _, item := range storedCanvas(t, userID) {
+		if item.ProjectID == projectID {
+			return item.Revision
+		}
+	}
+	t.Fatalf("project %s not stored", projectID)
+	return 0
+}
+
+func canvasData(t *testing.T, userID string, projectID string) string {
+	t.Helper()
+	for _, item := range storedCanvas(t, userID) {
+		if item.ProjectID == projectID {
+			return item.Data
+		}
+	}
+	t.Fatalf("project %s not stored", projectID)
+	return ""
+}
+
+// 一个还开着旧状态的标签页保存时，不能把别处刚写进去的内容盖掉。
+func TestSaveCanvasProjectsRefusesStaleRevision(t *testing.T) {
+	user := model.AuthUser{ID: "user-stale"}
+	seedCanvasProjects(t, user.ID, "a")
+
+	fresh, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{
+		Projects:      []json.RawMessage{json.RawMessage(`{"id":"a","title":"第一次"}`)},
+		KeepIDs:       []string{"a"},
+		DeleteIDs:     &[]string{},
+		BaseRevisions: map[string]int64{"a": canvasRevision(t, user.ID, "a")},
+	})
+	if err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+	if len(fresh.Conflicts) != 0 {
+		t.Fatalf("first save conflicts = %v, want none", fresh.Conflicts)
+	}
+	written := fresh.Revisions["a"]
+	if written == 0 {
+		t.Fatal("first save should report the new revision of a")
+	}
+
+	stale, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{
+		Projects:      []json.RawMessage{json.RawMessage(`{"id":"a","title":"旧标签页"}`)},
+		KeepIDs:       []string{"a"},
+		DeleteIDs:     &[]string{},
+		BaseRevisions: map[string]int64{"a": written - 1},
+	})
+	if err != nil {
+		t.Fatalf("stale save: %v", err)
+	}
+	if len(stale.Conflicts) != 1 || stale.Conflicts[0].ID != "a" {
+		t.Fatalf("conflicts = %v, want one for a", stale.Conflicts)
+	}
+	if stale.Conflicts[0].Revision != written {
+		t.Errorf("conflict revision = %d, want the stored %d", stale.Conflicts[0].Revision, written)
+	}
+	if got := string(stale.Conflicts[0].Data); got != `{"id":"a","title":"第一次"}` {
+		t.Errorf("conflict data = %s, want the server copy", got)
+	}
+	if got := canvasData(t, user.ID, "a"); got != `{"id":"a","title":"第一次"}` {
+		t.Errorf("stored data = %s, the stale save must not have overwritten it", got)
+	}
+}
+
+// 版本对得上就照常写入，并把新版本号给回客户端。
+func TestSaveCanvasProjectsBumpsRevisionOnAcceptedWrite(t *testing.T) {
+	user := model.AuthUser{ID: "user-bump"}
+	seedCanvasProjects(t, user.ID, "a")
+	base := canvasRevision(t, user.ID, "a")
+
+	result, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{
+		Projects:      []json.RawMessage{json.RawMessage(`{"id":"a","title":"新的"}`)},
+		KeepIDs:       []string{"a"},
+		DeleteIDs:     &[]string{},
+		BaseRevisions: map[string]int64{"a": base},
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	stored := canvasRevision(t, user.ID, "a")
+	if stored <= base {
+		t.Errorf("stored revision = %d, want greater than base %d", stored, base)
+	}
+	if result.Revisions["a"] != stored {
+		t.Errorf("reported revision = %d, stored = %d", result.Revisions["a"], stored)
+	}
+}
+
+// 新建的画布客户端没有版本号可给，base 0 且行不存在就是插入，不是冲突。
+func TestSaveCanvasProjectsTreatsUnknownBaseAsInsert(t *testing.T) {
+	user := model.AuthUser{ID: "user-insert"}
+	seedCanvasProjects(t, user.ID, "a")
+
+	result, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{
+		Projects:      []json.RawMessage{json.RawMessage(`{"id":"new","title":"新建"}`)},
+		KeepIDs:       []string{"a", "new"},
+		DeleteIDs:     &[]string{},
+		BaseRevisions: map[string]int64{"new": 0},
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if len(result.Conflicts) != 0 {
+		t.Fatalf("conflicts = %v, want none for a brand new project", result.Conflicts)
+	}
+	if got := canvasData(t, user.ID, "new"); got != `{"id":"new","title":"新建"}` {
+		t.Errorf("stored = %s, want the new project", got)
+	}
+}
+
+// 老客户端不发 baseRevisions，必须保持原来的无条件覆盖，否则一发版就全是冲突。
+func TestSaveCanvasProjectsWithoutBaseRevisionsStillOverwrites(t *testing.T) {
+	user := model.AuthUser{ID: "user-legacy"}
+	seedCanvasProjects(t, user.ID, "a")
+
+	result, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{
+		Projects: []json.RawMessage{json.RawMessage(`{"id":"a","title":"老客户端"}`)},
+		KeepIDs:  []string{"a"},
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if len(result.Conflicts) != 0 {
+		t.Fatalf("conflicts = %v, want none for a legacy client", result.Conflicts)
+	}
+	if got := canvasData(t, user.ID, "a"); got != `{"id":"a","title":"老客户端"}` {
+		t.Errorf("stored = %s, want the legacy overwrite", got)
+	}
+}
+
+// 带了删除集就只删它列出来的：旧标签页的 keepIds 不该再删掉别处新建的画布。
+func TestSaveCanvasProjectsOnlyDeletesWhatDeleteIDsLists(t *testing.T) {
+	user := model.AuthUser{ID: "user-explicit-delete"}
+	seedCanvasProjects(t, user.ID, "a", "b", "c")
+
+	if _, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{
+		KeepIDs:   []string{"a"},
+		DeleteIDs: &[]string{"b"},
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if got := strings.Join(canvasIDs(storedCanvas(t, user.ID)), ","); got != "a,c" {
+		t.Fatalf("remaining = %s, want a,c (c was never asked to be deleted)", got)
+	}
+}
+
+// 客户端要拿到每个画布的版本号才能在下次保存时报上 base。
+func TestReadCanvasSnapshotExposesRevisions(t *testing.T) {
+	user := model.AuthUser{ID: "user-revisions"}
+	seedCanvasProjects(t, user.ID, "a", "b")
+
+	snapshot, err := GetUserDataSnapshot(user, "canvas")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var payload struct {
+		Projects  []json.RawMessage `json:"projects"`
+		Revisions map[string]int64  `json:"revisions"`
+	}
+	if err := json.Unmarshal(snapshot.Data, &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Projects) != 2 {
+		t.Fatalf("projects = %d, want 2", len(payload.Projects))
+	}
+	if _, ok := payload.Revisions["a"]; !ok {
+		t.Errorf("revisions = %v, want an entry for a", payload.Revisions)
+	}
+	if _, ok := payload.Revisions["b"]; !ok {
+		t.Errorf("revisions = %v, want an entry for b", payload.Revisions)
 	}
 }
