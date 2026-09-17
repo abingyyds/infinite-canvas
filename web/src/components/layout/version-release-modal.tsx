@@ -4,6 +4,7 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useVersionCheck } from "@/hooks/use-version-check";
 import { APP_VERSION } from "@/constant/env";
+import { cn } from "@/lib/utils";
 
 function getTagColor(type: string) {
     if (type === "新增" || type === "Added") return "green";
@@ -31,7 +32,7 @@ export function VersionReleaseModal({ className, style }: VersionReleaseModalPro
         <>
             <button
                 type="button"
-                className={className || "shrink-0 cursor-pointer text-xs font-medium text-stone-500 transition hover:text-stone-950 dark:text-stone-400 dark:hover:text-white"}
+                className={cn("shrink-0 cursor-pointer text-xs font-medium text-stone-500 transition hover:text-stone-950 dark:text-stone-400 dark:hover:text-white", className)}
                 style={style}
                 onClick={openReleaseModal}
                 title={t("version.viewUpdates")}
