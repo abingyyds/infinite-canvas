@@ -266,6 +266,7 @@ export default function ImagePage() {
     };
 
     const createSession = () => {
+        setLogsOpen(false);
         setPrompt("");
         setReferences([]);
         setResults([]);

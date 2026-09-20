@@ -265,6 +265,7 @@ export default function VideoPage() {
     };
 
     const createSession = () => {
+        setLogsOpen(false);
         setPrompt("");
         setReferences([]);
         setResults([]);
