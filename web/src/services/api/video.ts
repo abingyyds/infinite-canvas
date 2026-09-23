@@ -537,38 +537,28 @@ async function uploadReferenceMedia(file: File) {
 }
 
 async function videoResultFromUrl(url: string, config: AiConfig, remote: boolean, task?: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationResult> {
-    const remoteContentUrl = remote ? remoteVideoContentProxyUrl(config, url) : "";
+    const contentUrl = videoContentUrl(config, url);
     try {
-        if (remoteContentUrl) {
-            const response = await axios.get<Blob>(remoteContentUrl, { headers: aiHeaders(config), params: task?.requestModel ? { model: task.requestModel } : undefined, responseType: "blob", signal: options?.signal });
+        if (contentUrl) {
+            const params = remote && task?.requestModel ? { model: task.requestModel } : undefined;
+            const response = await axios.get<Blob>(contentUrl, { headers: aiHeaders(config), params, responseType: "blob", signal: options?.signal });
             await assertVideoBlob(response.data);
             return { blob: response.data };
         }
-        if (!remote && shouldSendVideoContentAuth(config, url)) {
-            // 浏览器跨域取不了带鉴权的视频内容，交给后端代下载。
-            const response = await axios.post<Blob>("/api/video-content", { url, apiKey: config.apiKey }, { responseType: "blob", headers: gatewayAuthHeaders(), signal: options?.signal });
-            await assertVideoBlob(response.data);
-            return { blob: response.data };
-        }
-        const headers = shouldSendVideoContentAuth(config, url) ? aiHeaders(config) : undefined;
-        const response = await axios.get<Blob>(withLocalProxy(url), { responseType: "blob", ...(headers ? { headers } : {}), signal: options?.signal });
+        const response = await axios.get<Blob>(withLocalProxy(url), { responseType: "blob", signal: options?.signal });
         await assertVideoBlob(response.data);
         return { blob: response.data };
     } catch (error) {
         if (axios.isCancel(error) || options?.signal?.aborted) throw error;
-        if (remoteContentUrl) throw new Error(readAxiosError(error, "视频已生成，但下载视频内容失败"));
+        if (contentUrl) throw new Error(readAxiosError(error, "视频已生成，但下载视频内容失败"));
         return { url, mimeType: "video/mp4" };
     }
 }
 
-function gatewayAuthHeaders() {
-    const token = useUserStore.getState().token;
-    return token ? { Authorization: `Bearer ${token}` } : undefined;
-}
-
-function remoteVideoContentProxyUrl(config: AiConfig, url: string) {
+/** 网关返回的 /videos/{id}/content 需要鉴权，且域名可能和配置的 baseUrl 不同；改写到 baseUrl 上带 Key 取。 */
+export function videoContentUrl(config: Pick<AiConfig, "baseUrl">, url: string) {
     const taskId = videoContentTaskId(url);
-    return taskId ? aiApiUrl(config, `/videos/${encodeURIComponent(taskId)}/content`) : "";
+    return taskId ? buildApiUrl(config.baseUrl, `/videos/${encodeURIComponent(taskId)}/content`) : "";
 }
 
 function videoContentTaskId(value: string) {
@@ -590,11 +580,6 @@ function videoContentPath(value: string) {
         return "";
     }
     return text.split(/[?#]/)[0];
-}
-
-function shouldSendVideoContentAuth(config: AiConfig, url: string) {
-    const videosBaseUrl = aiApiUrl(config, "/videos/");
-    return url.startsWith(videosBaseUrl) && /\/content(?:\?|$)/.test(url);
 }
 
 function assertVideoConfig(config: AiConfig, model: string) {

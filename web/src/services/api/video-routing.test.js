@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { isUnifiedJsonVideoModel, unifiedVideoDuration, unwrapEnvelope, videoCreatePath, videoPollTimedOut } from "./video";
+import { isUnifiedJsonVideoModel, unifiedVideoDuration, unwrapEnvelope, videoContentUrl, videoCreatePath, videoPollTimedOut } from "./video";
 import { isSeedanceVideoModel } from "@/lib/seedance-video";
 
 const xai = { baseUrl: "https://api.x.ai" };
@@ -97,5 +97,17 @@ describe("video poll budget", () => {
     it("does give up eventually", () => {
         const startedAt = 1_000_000;
         expect(videoPollTimedOut(startedAt, startedAt + 25 * 60_000)).toBe(true);
+    });
+});
+
+describe("video content url", () => {
+    const direct = { baseUrl: "https://relay.example.org/v1" };
+
+    it("rewrites the gateway's own content host onto the configured base url", () => {
+        expect(videoContentUrl(direct, "https://subrouter.example.com/v1/videos/task_1rARY/content")).toBe("https://relay.example.org/v1/videos/task_1rARY/content");
+    });
+
+    it("leaves third-party result urls alone", () => {
+        expect(videoContentUrl(direct, "https://cdn.example.net/api/video-content/vid_1fea")).toBe("");
     });
 });
