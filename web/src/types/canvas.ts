@@ -1,3 +1,5 @@
+import type { ImageDownloadSource } from "@/services/api/image-download";
+
 export type Position = {
     x: number;
     y: number;
@@ -33,6 +35,7 @@ export type CanvasNodeImage = {
     // 网关异步任务号。图片按槽并发生成，所以它落在槽上而不是节点上：刷新后靠它接着轮询，
     // 而不是把一个已经付过费、还在跑的任务当作中断丢掉。
     taskId?: string;
+    pendingImageDownload?: ImageDownloadSource;
     storageKey?: string;
     naturalWidth: number;
     naturalHeight: number;
@@ -86,6 +89,7 @@ export type CanvasNodeMetadata = {
     durationMs?: number;
     // 写回节点自身的生图（如全景图）没有图片槽，任务号只能挂在节点上
     imageTaskId?: string;
+    pendingImageDownload?: ImageDownloadSource;
     videoTaskId?: string;
     videoTaskProvider?: "openai" | "gemini" | "seedance";
     videoTaskModel?: string;

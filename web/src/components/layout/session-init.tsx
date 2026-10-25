@@ -30,6 +30,8 @@ export function SessionInit() {
             if (!useUserStore.getState().token) return;
             clearSession();
             stopUserDataSync();
+            // 图片链接已经返回，留在当前页显示下载错误，避免跳转卸载节点、丢掉待下载结果。
+            if (config.url === "/api/media-content") return;
             navigate(`/login?redirect=${encodeURIComponent(location.pathname + location.search)}`, { replace: true });
         };
         const interceptor = axios.interceptors.response.use(

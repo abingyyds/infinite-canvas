@@ -25,7 +25,7 @@ export function createCanvasNode(type: CanvasNodeTypeId, position: Position, met
 }
 
 export function imageMetadata(image: UploadedImage): CanvasNodeMetadata {
-    return { content: image.url, storageKey: image.storageKey, status: "success", naturalWidth: image.width, naturalHeight: image.height, bytes: image.bytes, mimeType: image.mimeType };
+    return { content: image.url, storageKey: image.storageKey, status: "success", naturalWidth: image.width, naturalHeight: image.height, bytes: image.bytes, mimeType: image.mimeType, pendingImageDownload: undefined };
 }
 
 export function videoMetadata(video: UploadedFile): CanvasNodeMetadata {

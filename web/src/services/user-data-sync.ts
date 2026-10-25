@@ -38,8 +38,10 @@ export async function startUserDataSync(token: string, userId: string) {
     suppressSave = true;
     try {
         // 同一浏览器换账号时先清空本地库，避免上一个账号的画布/资产混入。
-        if (window.localStorage.getItem(LAST_USER_KEY) !== userId) {
-            await clearLocalData();
+        const lastUserId = window.localStorage.getItem(LAST_USER_KEY);
+        if (lastUserId !== userId) {
+            // 首次登录保留游客的本地画布（包括已生成但尚未下载的图片）；只有换账号才清空。
+            if (lastUserId) await clearLocalData();
             window.localStorage.setItem(LAST_USER_KEY, userId);
         }
         await Promise.all([waitForHydration(useCanvasStore), waitForHydration(useAssetStore)]);

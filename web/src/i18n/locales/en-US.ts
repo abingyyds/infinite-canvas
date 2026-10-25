@@ -4,6 +4,12 @@ export default {
         description: "An infinite canvas creation tool",
     },
     theme: { toggle: "Toggle theme" },
+    imageDownload: {
+        retry: "Retry download",
+        loginRequired: "The image was generated, but you are signed out or your session expired. Sign in and retry the download. The image link is saved; this will not generate or bill another image.",
+        failed: "The image was generated, but downloading failed. The link is saved. Retry the download without generating or paying for another image.",
+        linkUnavailable: "The original image link expired or access was denied. Contact the provider. The link is saved; no new image will be generated automatically.",
+    },
     common: {
         cancel: "Cancel",
         save: "Save",

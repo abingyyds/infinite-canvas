@@ -4,6 +4,12 @@ export default {
         description: "一个无限画布创作工具",
     },
     theme: { toggle: "切换主题" },
+    imageDownload: {
+        retry: "重新下载",
+        loginRequired: "图片已生成，但尚未登录本站或登录已失效。请登录后重新下载，图片链接已保留，不会重新生图扣费。",
+        failed: "图片已生成，但下载失败。图片链接已保留，请重新下载，不会重新生图扣费。",
+        linkUnavailable: "图片原链接已失效或无权访问，请联系渠道确认。链接已保留，不会自动重新生图扣费。",
+    },
     common: {
         cancel: "取消",
         save: "保存",

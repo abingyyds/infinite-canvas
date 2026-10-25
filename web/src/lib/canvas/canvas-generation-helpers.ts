@@ -145,14 +145,14 @@ export function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
         if (hasResumableVideoTask(node) || (node.metadata?.imageTaskId && !node.metadata?.content)) return node;
         // 同一节点里带任务号的槽还能续，只有剩下那些才算中断
         const resumable = new Set(resumableImageSlots(node).map((image) => image.id));
-        const images = node.metadata.images?.map((image) => (image.status === "loading" && !resumable.has(image.id) ? { ...image, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : image));
+        const images = node.metadata.images?.map((image) => (image.status === "loading" && !resumable.has(image.id) ? { ...image, status: "error" as const, errorDetails: i18n.t(image.pendingImageDownload ? "imageDownload.failed" : "canvas.generation.interrupted") } : image));
         if (resumable.size) return { ...node, metadata: { ...node.metadata, images } };
         return {
             ...node,
             metadata: {
                 ...node.metadata,
                 status: "error" as const,
-                errorDetails: i18n.t("canvas.generation.interrupted"),
+                errorDetails: i18n.t(node.metadata.pendingImageDownload || images?.some((image) => image.pendingImageDownload) ? "imageDownload.failed" : "canvas.generation.interrupted"),
                 images,
                 texts: node.metadata.texts?.map((text) => (text.status === "loading" ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : text)),
             },

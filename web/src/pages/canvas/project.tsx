@@ -6,6 +6,8 @@ import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { requestEdit, requestGeneration, requestImageQuestion, waitForImageTask } from "@/services/api/image";
+import { downloadGeneratedImage, type ImageDownloadSource } from "@/services/api/image-download";
+import { applyDownloadedImage, pendingImageDownload, rememberImageDownload } from "@/lib/canvas/canvas-image-download";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -324,6 +326,14 @@ function InfiniteCanvasPage() {
         [],
     );
 
+    const markImageDownload = useCallback(
+        (nodeId: string, imageId?: string) => (source: ImageDownloadSource) => {
+            if (!/^https?:\/\//i.test(source.url)) return;
+            setNodes((prev) => prev.map((node) => node.id === nodeId ? rememberImageDownload(node, source, imageId) : node));
+        },
+        [],
+    );
+
     const completeVideoNodeTask = useCallback(
         async (nodeId: string, config: Parameters<typeof buildGenerationConfig>[0], prompt: string, images: Parameters<typeof createVideoGenerationTask>[2], signal: AbortSignal, extra: CanvasNodeData["metadata"] = {}, videos: ReferenceVideo[] = [], audios: ReferenceAudio[] = []) => {
             const task = await createVideoGenerationTask(config, prompt, images, { signal, videos, audios });
@@ -357,26 +367,9 @@ function InfiniteCanvasPage() {
                         slots.map(async (slot) => {
                             try {
                                 const images = await waitForImageTask(generationConfig, slot.taskId || "", { signal });
+                                markImageDownload(node.id, slot.id)({ url: images[0].dataUrl });
                                 const uploaded = await uploadImage(images[0].dataUrl, { signal });
-                                setNodes((prev) =>
-                                    prev.map((item) =>
-                                        item.id === node.id
-                                            ? {
-                                                  ...item,
-                                                  metadata: {
-                                                      ...item.metadata,
-                                                      status: NODE_STATUS_SUCCESS,
-                                                      errorDetails: undefined,
-                                                      images: item.metadata?.images?.map((image) =>
-                                                          image.id === slot.id
-                                                              ? { ...image, status: NODE_STATUS_SUCCESS, errorDetails: undefined, content: uploaded.url, storageKey: uploaded.storageKey, naturalWidth: uploaded.width, naturalHeight: uploaded.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType }
-                                                              : image,
-                                                      ),
-                                                  },
-                                              }
-                                            : item,
-                                    ),
-                                );
+                                setNodes((prev) => prev.map((item) => item.id === node.id ? applyDownloadedImage(item, uploaded, slot.id) : item));
                             } catch (error) {
                                 if (isGenerationCanceled(error)) return;
                                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
@@ -395,6 +388,7 @@ function InfiniteCanvasPage() {
                 const taskId = node.metadata?.imageTaskId;
                 if (!taskId) return;
                 const images = await waitForImageTask(generationConfig, taskId, { signal });
+                markImageDownload(node.id)({ url: images[0].dataUrl });
                 const uploaded = await uploadImage(images[0].dataUrl, { signal });
                 setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, ...imageMetadata(uploaded), errorDetails: undefined } } : item)));
             } catch (error) {
@@ -406,7 +400,7 @@ function InfiniteCanvasPage() {
                 if (controller) finishGenerationRequest(node.id, controller);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, startGenerationRequest, t],
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, markImageDownload, startGenerationRequest, t],
     );
 
     const pollVideoNodeTask = useCallback(
@@ -2115,7 +2109,7 @@ function InfiniteCanvasPage() {
             setRunningNodeId(childId);
             const controller = startGenerationRequest(childId, node.id, childId);
             try {
-                const image = await requestEdit(generationConfig, prompt, references, { signal: controller.signal, onTaskCreated: markImageTask(childId) }).then((items) => items[0]);
+                const image = await requestEdit(generationConfig, prompt, references, { signal: controller.signal, onTaskCreated: markImageTask(childId), onImageGenerated: markImageDownload(childId) }).then((items) => items[0]);
                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                 const size = fitNodeSize(uploaded.width, uploaded.height, node.width, node.height);
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
@@ -2129,7 +2123,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest, t],
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, markImageDownload, markImageTask, message, openConfigDialog, startGenerationRequest, t],
     );
 
     const upscaleImageNode = useCallback(async (node: CanvasNodeData, params: CanvasImageUpscaleParams) => {
@@ -2195,7 +2189,7 @@ function InfiniteCanvasPage() {
                     generationConfig,
                     prompt,
                     [{ id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }],
-                    { signal: controller.signal, onTaskCreated: markImageTask(childId) },
+                    { signal: controller.signal, onTaskCreated: markImageTask(childId), onImageGenerated: markImageDownload(childId) },
                 ).then((items) => items[0]);
                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                 const size = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
@@ -2209,7 +2203,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, openConfigDialog, startGenerationRequest, t],
+        [effectiveConfig, finishGenerationRequest, markImageDownload, markImageTask, openConfigDialog, startGenerationRequest, t],
     );
 
     const handleFontSizeChange = useCallback((nodeId: string, fontSize: number) => {
@@ -2412,14 +2406,14 @@ function InfiniteCanvasPage() {
                 if (!scene) return;
                 setRunningNodeId(nodeId);
                 const controller = startGenerationRequest(nodeId, nodeId, nodeId);
-                setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, prompt: scene, status: NODE_STATUS_LOADING, errorDetails: undefined } } : node)));
+                setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, prompt: scene, status: NODE_STATUS_LOADING, errorDetails: undefined, pendingImageDownload: undefined } } : node)));
                 try {
                     const fullPrompt = (builtinPanel.promptPrefix || "") + scene;
                     const context = await hydrateNodeGenerationContext(buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, fullPrompt));
                     const refs = context.referenceImages;
                     const image = refs.length
-                        ? await requestEdit({ ...generationConfig, count: "1" }, context.prompt, refs, { signal: controller.signal, onTaskCreated: markImageTask(nodeId) }).then((items) => items[0])
-                        : await requestGeneration({ ...generationConfig, count: "1" }, context.prompt, { signal: controller.signal, onTaskCreated: markImageTask(nodeId) }).then((items) => items[0]);
+                        ? await requestEdit({ ...generationConfig, count: "1" }, context.prompt, refs, { signal: controller.signal, onTaskCreated: markImageTask(nodeId), onImageGenerated: markImageDownload(nodeId) }).then((items) => items[0])
+                        : await requestGeneration({ ...generationConfig, count: "1" }, context.prompt, { signal: controller.signal, onTaskCreated: markImageTask(nodeId), onImageGenerated: markImageDownload(nodeId) }).then((items) => items[0]);
                     const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                     setNodes((prev) =>
                         prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...imageMetadata(uploaded), prompt: scene, model: generationConfig.model, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)),
@@ -2511,7 +2505,7 @@ function InfiniteCanvasPage() {
                                             width: rootNode.width,
                                             height: rootNode.height,
                                             title: rootNode.title,
-                                            metadata: { ...node.metadata, ...rootNode.metadata, errorDetails: undefined },
+                                            metadata: { ...node.metadata, ...rootNode.metadata, errorDetails: undefined, pendingImageDownload: undefined },
                                         }
                                       : isImageNode
                                         ? {
@@ -2543,8 +2537,8 @@ function InfiniteCanvasPage() {
                         imageIds.map(async (imageId) => {
                             try {
                                 const image = referenceImages.length
-                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, { signal: controller.signal, onTaskCreated: markImageTask(rootId, imageId) }).then((items) => items[0])
-                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal, onTaskCreated: markImageTask(rootId, imageId) }).then((items) => items[0]);
+                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, { signal: controller.signal, onTaskCreated: markImageTask(rootId, imageId), onImageGenerated: markImageDownload(rootId, imageId) }).then((items) => items[0])
+                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal, onTaskCreated: markImageTask(rootId, imageId), onImageGenerated: markImageDownload(rootId, imageId) }).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                                 const item: CanvasNodeImage = { id: imageId, status: NODE_STATUS_SUCCESS, content: uploaded.url, storageKey: uploaded.storageKey, naturalWidth: uploaded.width, naturalHeight: uploaded.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType };
@@ -2598,7 +2592,7 @@ function InfiniteCanvasPage() {
                             node.id === nodeId && isConfigNode
                                 ? { ...node, metadata: { ...node.metadata, status: hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: hasSuccess ? undefined : t("canvas.projectPage.generationFailed") } }
                                 : node.id === rootId
-                                  ? { ...node, metadata: { ...node.metadata, status: hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: hasSuccess ? undefined : t("canvas.projectPage.allFailed") } }
+                                  ? { ...node, metadata: { ...node.metadata, status: hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: hasSuccess ? undefined : firstError || t("canvas.projectPage.allFailed") } }
                                     : node,
                         ),
                     );
@@ -2825,7 +2819,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [completeVideoNodeTask, effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest, t],
+        [completeVideoNodeTask, effectiveConfig, finishGenerationRequest, isAiConfigReady, markImageDownload, markImageTask, message, openConfigDialog, startGenerationRequest, t],
     );
     useEffect(() => {
         generateNodeRef.current = handleGenerateNode;
@@ -2833,6 +2827,29 @@ function InfiniteCanvasPage() {
 
     const handleRetryNode = useCallback(
         async (node: CanvasNodeData, imageId?: string) => {
+            const downloadImageId = imageId || node.metadata?.images?.find((image) => image.status === NODE_STATUS_ERROR && image.pendingImageDownload)?.id;
+            const download = pendingImageDownload(node, downloadImageId);
+            if (download) {
+                // 已经有生成结果时，必须在模型配置、提示词和参考图检查之前走下载分支。
+                if (generationRequestsRef.current.has(node.id)) return;
+                const controller = startGenerationRequest(node.id, node.id, node.id);
+                setRunningNodeId(node.id);
+                setNodes((prev) => prev.map((item) => item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined, images: item.metadata?.images?.map((image) => image.id === downloadImageId ? { ...image, status: NODE_STATUS_LOADING, errorDetails: undefined } : image) } } : item));
+                try {
+                    const dataUrl = await downloadGeneratedImage(download, { signal: controller.signal });
+                    const uploaded = await uploadImage(dataUrl, { signal: controller.signal });
+                    setNodes((prev) => prev.map((item) => item.id === node.id ? applyDownloadedImage(item, uploaded, downloadImageId) : item));
+                } catch (error) {
+                    if (isGenerationCanceled(error)) return;
+                    const errorDetails = error instanceof Error ? error.message : t("imageDownload.failed");
+                    message.error(errorDetails);
+                    setNodes((prev) => prev.map((item) => item.id === node.id ? { ...item, metadata: { ...item.metadata, status: item.metadata?.content ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails, images: item.metadata?.images?.map((image) => image.id === downloadImageId ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image) } } : item));
+                } finally {
+                    finishGenerationRequest(node.id, controller);
+                    setRunningNodeId((current) => current === node.id ? null : current);
+                }
+                return;
+            }
             if (hasResumableVideoTask(node)) {
                 await pollVideoNodeTask(node);
                 return;
@@ -2911,8 +2928,8 @@ function InfiniteCanvasPage() {
                 }
 
                 const image = useReferenceImages
-                    ? await requestEdit(generationConfig, prompt, retryImages, { signal: controller.signal, onTaskCreated: markImageTask(node.id, imageId || node.metadata?.primaryImageId) }).then((items) => items[0])
-                    : await requestGeneration(generationConfig, prompt, { signal: controller.signal, onTaskCreated: markImageTask(node.id, imageId || node.metadata?.primaryImageId) }).then((items) => items[0]);
+                    ? await requestEdit(generationConfig, prompt, retryImages, { signal: controller.signal, onTaskCreated: markImageTask(node.id, imageId || node.metadata?.primaryImageId), onImageGenerated: markImageDownload(node.id, imageId || node.metadata?.primaryImageId) }).then((items) => items[0])
+                    : await requestGeneration(generationConfig, prompt, { signal: controller.signal, onTaskCreated: markImageTask(node.id, imageId || node.metadata?.primaryImageId), onImageGenerated: markImageDownload(node.id, imageId || node.metadata?.primaryImageId) }).then((items) => items[0]);
                 const uploadedImage = await uploadImage(image.dataUrl, { signal: controller.signal });
                 const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
                 const retryImage: CanvasNodeImage = {
@@ -2982,7 +2999,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [completeVideoNodeTask, effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, pollVideoNodeTask, startGenerationRequest, t],
+        [completeVideoNodeTask, effectiveConfig, finishGenerationRequest, isAiConfigReady, markImageDownload, markImageTask, message, openConfigDialog, pollVideoNodeTask, startGenerationRequest, t],
     );
 
     const deleteBatchImage = useCallback((nodeId: string, imageId: string) => {

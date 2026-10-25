@@ -8,10 +8,11 @@ import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile, normalizeImageDataUrlForUpload } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
-import { blobToDataUrl, imageToDataUrl } from "@/services/image-storage";
+import { imageToDataUrl } from "@/services/image-storage";
 import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
 import type { ReferenceImage } from "@/types/image";
 import { asyncImageTaskFailure, delay, imagePollTimedOut, imagesFromTask, isAsyncFacadeUnsupported, resolveTaskMediaUrl, type MediaTask } from "./image-async";
+import { downloadGeneratedImage, type ImageDownloadSource } from "./image-download";
 
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
@@ -105,7 +106,7 @@ type GeminiPayload = {
 };
 type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseToolCall[]; error?: string };
 // onTaskCreated 让调用方在任务刚受理时就把任务号落进画布，刷新后才接得上。
-type RequestOptions = { signal?: AbortSignal; onTaskCreated?: (taskId: string) => void };
+type RequestOptions = { signal?: AbortSignal; onTaskCreated?: (taskId: string) => void; onImageGenerated?: (source: ImageDownloadSource) => void };
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -769,21 +770,9 @@ export function isRemoteImageUrl(value: string) {
     return value.startsWith("http://") || value.startsWith("https://");
 }
 
-/** 卖家常以预签名外链返回图片：没有 CORS 头、几小时就过期，生成当场经后端代理取回字节。 */
-async function ensureImageDataUrl(url: string, options?: RequestOptions) {
-    if (!isRemoteImageUrl(url)) return url;
-    const token = useUserStore.getState().token;
-    try {
-        const response = await axios.post<Blob>(
-            "/api/media-content",
-            { url },
-            { responseType: "blob", headers: token ? { Authorization: `Bearer ${token}` } : undefined, signal: options?.signal },
-        );
-        return await blobToDataUrl(response.data);
-    } catch (error) {
-        if (axios.isCancel(error) || options?.signal?.aborted) throw error;
-        throw new Error(apiText("imageDownloadFailed"));
-    }
+function rememberGeneratedImage(images: Array<{ dataUrl: string }>, options?: RequestOptions, viaProxy = false) {
+    const url = images[0]?.dataUrl;
+    if (url && isRemoteImageUrl(url)) options?.onImageGenerated?.({ url, viaProxy });
 }
 
 async function requestChatImagesOnce(config: AiConfig, prompt: string, references: string[], options?: RequestOptions) {
@@ -796,7 +785,9 @@ async function requestChatImagesOnce(config: AiConfig, prompt: string, reference
         { headers: aiHeaders(config, "application/json"), signal: options?.signal },
     );
     const urls = parseChatImagePayload(response.data);
-    return Promise.all(urls.map(async (url) => ({ id: nanoid(), dataUrl: await ensureImageDataUrl(url, options) })));
+    // 必须在下载前保留链接，401、断网或取消都不能丢掉已经付费生成的结果。
+    rememberGeneratedImage(urls.map((dataUrl) => ({ dataUrl })), options, true);
+    return Promise.all(urls.map(async (url) => ({ id: nanoid(), dataUrl: isRemoteImageUrl(url) ? await downloadGeneratedImage({ url, viaProxy: true }, options) : url })));
 }
 
 async function requestChatImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, options?: RequestOptions) {
@@ -859,6 +850,12 @@ export async function waitForImageTask(config: AiConfig, taskId: string, options
 }
 
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
+    const images = await generateImages(config, prompt, options);
+    rememberGeneratedImage(images, options);
+    return images;
+}
+
+async function generateImages(config: AiConfig, prompt: string, options?: RequestOptions) {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const script = resolveModelScript(config, config.model || config.imageModel);
@@ -929,6 +926,12 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 }
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
+    const images = await editImages(config, prompt, references, options);
+    rememberGeneratedImage(images, options);
+    return images;
+}
+
+async function editImages(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
