@@ -201,10 +201,68 @@ func TestReadCanvasSnapshotWithNoProjects(t *testing.T) {
 	}
 }
 
+func sizedCanvasProject(size int) json.RawMessage {
+	prefix := `{"id":"big","title":"无标题画布 4","nodes":[{"id":"text","type":"text","metadata":{"content":"`
+	suffix := `"}}]}`
+	return json.RawMessage(prefix + strings.Repeat("x", size-len(prefix)-len(suffix)) + suffix)
+}
+
+func TestSaveCanvasProjectsAcceptsUpTo32MiB(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		size int
+	}{
+		{name: "screenshot_12_2_MiB", size: 122 * 1024 * 1024 / 10},
+		{name: "exactly_32_MiB", size: 32 * 1024 * 1024},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			user := model.AuthUser{ID: "user-capacity-" + test.name}
+			project := sizedCanvasProject(test.size)
+			if _, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{
+				Projects: []json.RawMessage{project},
+				KeepIDs:  []string{"big"},
+			}); err != nil {
+				t.Fatalf("save: %v", err)
+			}
+			if canvasData(t, user.ID, "big") != string(project) {
+				t.Fatal("saved canvas differs from the submitted data")
+			}
+		})
+	}
+}
+
+func TestSaveCanvasProjectsRejectsOver32MiBWithoutChangingStoredData(t *testing.T) {
+	user := model.AuthUser{ID: "user-capacity-overflow"}
+	seedCanvasProjects(t, user.ID, "small", "big", "obsolete")
+	before := storedCanvas(t, user.ID)
+	deleting := []string{"obsolete"}
+	_, err := SaveUserCanvasProjects(user, CanvasProjectsPatch{
+		Projects:  []json.RawMessage{json.RawMessage(`{"id":"small","title":"changed"}`), sizedCanvasProject(32*1024*1024 + 1)},
+		KeepIDs:   []string{"big", "small"},
+		DeleteIDs: &deleting,
+	})
+	coded, ok := err.(interface{ SafeStatus() int })
+	if !ok || coded.SafeStatus() != http.StatusRequestEntityTooLarge {
+		t.Fatalf("error = %v, want HTTP 413", err)
+	}
+	if !strings.Contains(err.Error(), "单个画布 32.0MB 上限") {
+		t.Fatalf("error = %v, want the current limit", err)
+	}
+	items := storedCanvas(t, user.ID)
+	if got := strings.Join(canvasIDs(items), ","); got != "small,big,obsolete" {
+		t.Fatalf("stored ids = %s, want the original list and order", got)
+	}
+	for index, item := range items {
+		if item != before[index] {
+			t.Fatalf("project %s was changed by a rejected save", item.ProjectID)
+		}
+	}
+}
+
 func TestOversizeCanvasProjectErrorNamesTheCanvas(t *testing.T) {
 	project := json.RawMessage(`{"id":"big","title":"电蚊拍主图","nodes":[` + strings.Repeat(`"x",`, 100) + `"x"]}`)
 	err := oversizeCanvasProjectError(project)
-	for _, want := range []string{"电蚊拍主图", "8.0MB"} {
+	for _, want := range []string{"电蚊拍主图", "32.0MB"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("message = %q, want it to contain %q", err.Error(), want)
 		}

@@ -18,7 +18,7 @@ const maxUserDataSnapshotBytes = 32 * 1024 * 1024
 
 // 画布按项目分行存，所以限制的是单个画布，画布库总量不再设上限：
 // 保存只写改动的那几行，库大了也不会让保存失败。
-const maxCanvasProjectBytes = 8 * 1024 * 1024
+const maxCanvasProjectBytes = 32 * 1024 * 1024
 
 const canvasUserDataDomain = "canvas"
 
