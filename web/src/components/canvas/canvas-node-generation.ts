@@ -169,9 +169,17 @@ export function buildNodeResponseMessages(context: NodeGenerationContext): AiTex
     ];
 }
 
-export async function hydrateNodeGenerationContext(context: NodeGenerationContext) {
+export async function hydrateNodeGenerationContext(context: NodeGenerationContext, options?: { signal?: AbortSignal }) {
     const { imageToDataUrl } = await import("@/services/image-storage");
-    return { ...context, referenceImages: await Promise.all(context.referenceImages.map(async (image) => ({ ...image, dataUrl: await imageToDataUrl(image) }))) };
+    const referenceImages = await Promise.all(context.referenceImages.map(async (image) => {
+        try {
+            return { ...image, dataUrl: await imageToDataUrl(image, options) };
+        } catch (error) {
+            if (options?.signal?.aborted) throw error;
+            throw new Error(i18n.t("common.referenceImageReadFailed", { name: image.name }));
+        }
+    }));
+    return { ...context, referenceImages };
 }
 
 function readNodeTextInput(node: CanvasNodeData) {

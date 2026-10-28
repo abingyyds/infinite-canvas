@@ -33,6 +33,7 @@ export default {
         durationMinutes: "{{minutes}}分{{seconds}}秒",
         durationSeconds: "{{seconds}}秒",
         imageReadFailed: "读取图片失败",
+        referenceImageReadFailed: "无法读取参考图「{{name}}」，请重新上传图片，或检查图片链接和跨域配置后重试。尚未提交生成请求。",
         syncFailed: "云端同步失败，本次改动只保存在本机：{{message}}",
         dismiss: "关闭",
     },

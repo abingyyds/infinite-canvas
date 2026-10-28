@@ -33,6 +33,7 @@ export default {
         durationMinutes: "{{minutes}}m {{seconds}}s",
         durationSeconds: "{{seconds}}s",
         imageReadFailed: "Failed to read image",
+        referenceImageReadFailed: "Could not read reference image ‘{{name}}’. Upload it again or check its URL and CORS settings, then retry. No generation request was submitted.",
         syncFailed: "Cloud sync failed, this change is saved on this device only: {{message}}",
         dismiss: "Dismiss",
     },
