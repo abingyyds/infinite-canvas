@@ -24,6 +24,7 @@
 - 前端使用 Vite、React、React Router、TypeScript、Ant Design、Tailwind、Zustand。
 - 编写 Ant Design 相关代码时，参考 https://ant.design/llms-full.txt 理解组件 API、示例和设计规范，并优先结合项目当前 antd 版本与既有写法。
 - 外部服务请求统一放在 `web/src/services/api/`，由浏览器前端直连，不假设存在项目后端。
+- 视频创建请求和新建的视频调用脚本默认使用 JSON；后端不得按模型名把 JSON 改成 multipart，参考素材通过 URL 或 Data URL 传递，文件上传使用独立接口。
 - 全局或跨页面状态优先放在 `web/src/stores/`。
 - 已经放在全局 store 或全局 hook 中的状态/动作，组件需要时直接使用对应 store/hook，不要为了“纯组件”层层透传 props；避免一个组件传递过多参数。
 - 全局组件、全局常量、全局配置等全局性质的内容不要作为 props 或参数层层传递；哪里需要就在哪里直接从对应全局入口获取。

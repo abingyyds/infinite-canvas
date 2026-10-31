@@ -50,7 +50,7 @@ description: SubRouter 网关上各图片 / 视频模型的端点、请求体形
 
 `metadata.ratio` 传 `adaptive` 和具体比例都可以；`resolution` 用 `480p` / `720p` / `1080p`。
 
-multipart 体（`model` / `prompt` / `seconds` / `size` / `resolution_name` / `preset` / `input_reference[]`）只给官方 OpenAI Sora 用。这个网关的模型收到 multipart 会返回 400 `Request parameters are invalid`。
+本站的视频创建请求统一使用 JSON，后端不再按模型名转换为 multipart。默认兼容接口保留 `seconds`、`size`、`resolution_name`、布尔值 `generate_audio` / `watermark` 和参考素材字段；上面的 `duration` / `metadata` 结构仍用于对应的网关协议。内置网关的本地素材先独立上传再传 URL，直连渠道可使用 Data URL。
 
 轮询与取片：
 

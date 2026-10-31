@@ -65,7 +65,7 @@ export function videoCreatePath(config: AiConfig, model: string, remote: boolean
     return isGrokImagineVideoModel(model) && (remote || isXAIBaseUrl(config.baseUrl)) ? "/videos/generations" : "/videos";
 }
 
-/** 兼容网关上的 seedance / veo / omni 都收 JSON 版 /videos；官方 Sora 仍走 multipart。 */
+/** 这些兼容网关模型使用 duration / metadata 字段，其余模型也统一发送 JSON。 */
 export function isUnifiedJsonVideoModel(model: string) {
     const value = model.toLowerCase();
     if (value.includes("doubao-seedance")) return false;
@@ -112,20 +112,19 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     const selectedModel = (config.model || config.videoModel).trim();
     const requestConfig = resolveModelRequestConfig(config, selectedModel);
     const script = resolveModelScript(config, selectedModel);
-    if (script) return createPluginVideoTask(requestConfig, selectedModel, script, prompt, references, options);
+    const remote = isGatewayModel(config, selectedModel);
+    if (script) return createPluginVideoTask(requestConfig, selectedModel, remote, script, prompt, references, options);
     assertVideoConfig(requestConfig, requestConfig.model);
     if (requestConfig.apiFormat === "gemini") return createGeminiVideoTask(requestConfig, selectedModel, prompt, references, options);
-    const remote = isGatewayModel(config, selectedModel);
     const model = requestConfig.model;
     const isGrokVideo = isGrokImagineVideoModel(model);
-    const isOpenAIVideoJson = isGrokVideo || isUnifiedJsonVideoModel(model);
     if (isSeedanceVideoConfig(requestConfig)) {
         return createSeedanceTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
     }
     if (isGrokPreviewVideoModel(model)) return createGrokPreviewVideoTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
     if (isGrokVideo) return createGrokVideoTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
-    if (isOpenAIVideoJson) return createUnifiedVideoTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
-    return createOpenAIVideoTask(requestConfig, selectedModel, prompt, references, videoReferences, audioReferences, options);
+    if (isUnifiedJsonVideoModel(model)) return createUnifiedVideoTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
+    return createOpenAIVideoTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
 }
 
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
@@ -140,7 +139,7 @@ export async function pollVideoGenerationTask(config: AiConfig, task: VideoGener
     return task.provider === "seedance" ? pollSeedanceTask(requestConfig, task, remote, options) : pollOpenAIVideoTask(requestConfig, task, remote, options);
 }
 
-async function createPluginVideoTask(config: AiConfig, model: string, script: string, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
+async function createPluginVideoTask(config: AiConfig, model: string, remote: boolean, script: string, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
     if (!config.baseUrl.trim()) throw new Error(apiText("baseUrlRequired"));
     if (!config.apiKey.trim()) throw new Error(apiText("apiKeyRequired"));
     const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
@@ -155,6 +154,7 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
             images: refs,
             videos,
             audios,
+            referenceMedia: (file) => remote ? uploadReferenceMedia(file, options) : readFileAsDataUrl(file),
             params: {
                 seconds: normalizeVideoSeconds(config.videoSeconds),
                 size: normalizeVideoSize(config.size, config.vquality),
@@ -327,33 +327,33 @@ async function createUnifiedVideoTask(config: AiConfig, selectedModel: string, r
     }
 }
 
-async function createOpenAIVideoTask(config: AiConfig, selectedModel: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
+async function createOpenAIVideoTask(config: AiConfig, selectedModel: string, remote: boolean, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
     const model = config.model;
     const path = "/videos";
-    const images = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-    const videos = await Promise.all(videoReferences.map((video) => referenceMediaToFile(video, "ref.mp4", "invalidReferenceVideo", options)));
-    const audios = await Promise.all(audioReferences.map((audio) => referenceMediaToFile(audio, "ref.mp3", "invalidReferenceAudio", options)));
+    const [images, videos, audios] = await Promise.all([
+        Promise.all(references.map((image) => resolveGrokImageUrl(config, remote, image, options))),
+        Promise.all(videoReferences.map((video) => referenceMediaToUrl(remote, video, "ref.mp4", "invalidReferenceVideo", options))),
+        Promise.all(audioReferences.map((audio) => referenceMediaToUrl(remote, audio, "ref.mp3", "invalidReferenceAudio", options))),
+    ]);
     const mode = resolveVideoMode(config.videoMode, images.length);
-    const body = new FormData();
-    body.append("model", model);
-    body.append("prompt", prompt);
-    body.append("seconds", normalizeVideoSeconds(config.videoSeconds));
     const size = normalizeVideoSize(config.size, config.vquality);
-    if (size) body.append("size", size);
-    body.append("resolution_name", normalizeVideoResolution(config.vquality));
-    body.append("generate_audio", String(boolConfig(config.videoGenerateAudio, true)));
-    body.append("watermark", String(boolConfig(config.videoWatermark, false)));
-    body.append("mode", mode);
-    if (mode === "frames") {
-        if (images[0]) body.append("first_frame", images[0], "first.png");
-        if (images[1]) body.append("last_frame", images[1], "last.png");
-    } else {
-        images.forEach((file) => body.append("image[]", file, "ref.png"));
-    }
-    videos.forEach((file) => body.append("video[]", file));
-    audios.forEach((file) => body.append("audio[]", file));
+    const body = {
+        model,
+        prompt,
+        seconds: normalizeVideoSeconds(config.videoSeconds),
+        ...(size ? { size } : {}),
+        resolution_name: normalizeVideoResolution(config.vquality),
+        generate_audio: boolConfig(config.videoGenerateAudio, true),
+        watermark: boolConfig(config.videoWatermark, false),
+        mode,
+        ...(mode === "frames"
+            ? { ...(images[0] ? { first_frame: images[0] } : {}), ...(images[1] ? { last_frame: images[1] } : {}) }
+            : images.length ? { images } : {}),
+        ...(videos.length ? { videos } : {}),
+        ...(audios.length ? { audios } : {}),
+    };
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), body, { headers: aiHeaders(config), signal: options?.signal })).data);
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, path), body, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
         const id = readVideoTaskId(created);
         if (!id) throw new Error(apiText("noVideoTaskId"));
         return { id, provider: "openai", model: selectedModel, requestModel: model, path };
@@ -362,12 +362,12 @@ async function createOpenAIVideoTask(config: AiConfig, selectedModel: string, pr
     }
 }
 
-async function resolveGrokImageUrl(config: AiConfig, remote: boolean, image: ReferenceImage) {
+async function resolveGrokImageUrl(config: AiConfig, remote: boolean, image: ReferenceImage, options?: RequestOptions) {
     const directUrl = image.url || image.dataUrl;
     if (isPublicMediaUrl(directUrl)) return directUrl;
-    const dataUrl = await imageToDataUrl(image);
+    const dataUrl = await imageToDataUrl(image, options);
     if (!dataUrl?.startsWith("data:image/")) throw new Error("参考图读取失败，请换一张图片或重新上传");
-    if (remote) return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }));
+    if (remote) return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }), options);
     return dataUrl;
 }
 
@@ -525,12 +525,12 @@ async function resolveSeedanceAudioUrl(remote: boolean, audio: ReferenceAudio) {
 }
 
 /** 本地素材没有公网地址时，先传给后端换一个可被服务商回source的 URL。 */
-async function uploadReferenceMedia(file: File) {
+async function uploadReferenceMedia(file: File, options?: RequestOptions) {
     const token = useUserStore.getState().token;
     if (!token) throw new Error("使用本地参考素材需要先登录，并在服务端配置 PUBLIC_BASE_URL");
     const body = new FormData();
     body.append("file", file, file.name);
-    const response = await axios.post<ApiEnvelope<ReferenceMediaUploadResponse>>("/api/v1/media/references", body, { headers: { Authorization: `Bearer ${token}` } });
+    const response = await axios.post<ApiEnvelope<ReferenceMediaUploadResponse>>("/api/v1/media/references", body, { headers: { Authorization: `Bearer ${token}` }, signal: options?.signal });
     const payload = unwrapEnvelope(response.data, "参考素材上传失败");
     if (!payload.url) throw new Error("参考素材上传后没有返回公网 URL");
     return payload.url;
@@ -664,6 +664,12 @@ function parseDataUrlInline(dataUrl: string, fallbackType = "image/png"): Gemini
 
 async function fileToGeminiInline(file: File): Promise<GeminiInlineData> {
     return parseDataUrlInline(await readFileAsDataUrl(file), file.type || "application/octet-stream");
+}
+
+async function referenceMediaToUrl(remote: boolean, item: ReferenceVideo | ReferenceAudio, fallbackName: string, errorKey: "invalidReferenceVideo" | "invalidReferenceAudio", options?: RequestOptions) {
+    if (isPublicMediaUrl(item.url) || (!remote && item.url.startsWith("data:"))) return item.url;
+    const file = await referenceMediaToFile(item, fallbackName, errorKey, options);
+    return remote ? uploadReferenceMedia(file, options) : readFileAsDataUrl(file);
 }
 
 async function referenceMediaToFile(item: { name: string; type?: string; url?: string; storageKey?: string }, fallbackName: string, errorKey: "invalidReferenceVideo" | "invalidReferenceAudio", options?: RequestOptions) {

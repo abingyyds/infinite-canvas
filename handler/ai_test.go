@@ -230,17 +230,6 @@ func TestPrepareAIProxyBodyKeepsVeoAndOmniVideoJSONUntouched(t *testing.T) {
 	}
 }
 
-func TestPrepareAIProxyBodyStillConvertsOfficialVideoModelToMultipart(t *testing.T) {
-	raw := []byte(`{"model":"sora-2","prompt":"p","seconds":"6","size":"1280x720"}`)
-	_, contentType, err := prepareAIProxyBody("/videos", "/videos", raw, "application/json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(contentType, "multipart/form-data") {
-		t.Fatalf("contentType = %q", contentType)
-	}
-}
-
 func TestPrepareAIProxyBodyConvertsSubRouterGrokVideoToLegacyJSON(t *testing.T) {
 	raw := []byte(`{"model":"grok-video-1.5","prompt":"产品图轻微旋转展示","image":{"url":"https://example.com/first.jpg"},"duration":6,"aspect_ratio":"9:16"}`)
 	body, contentType, err := prepareAIProxyBody("/videos/generations", "/videos", raw, "application/json")

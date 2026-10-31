@@ -2,7 +2,6 @@ package handler
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
-	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -342,52 +340,22 @@ func prepareAIProxyBody(path string, proxyPath string, body []byte, contentType 
 	var videoHead struct {
 		Model string `json:"model"`
 	}
-	_ = json.Unmarshal(body, &videoHead)
-	if proxyPath == "/video/generations" || isUnifiedJSONVideo(videoHead.Model) {
+	if err := json.Unmarshal(body, &videoHead); err != nil {
+		return nil, "", err
+	}
+	if proxyPath == "/video/generations" {
 		return prepareUnifiedVideoJSONBody(body, contentType)
 	}
 	if proxyPath != "/videos" {
 		return body, contentType, nil
 	}
-	var payload struct {
-		Model          string   `json:"model"`
-		Prompt         string   `json:"prompt"`
-		Seconds        string   `json:"seconds"`
-		Size           string   `json:"size"`
-		ResolutionName string   `json:"resolution_name"`
-		Preset         string   `json:"preset"`
-		InputReference []string `json:"input_reference"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, "", err
-	}
-	if isGrokImagineVideo(payload.Model) {
-		if isGrokPreviewVideo(payload.Model) {
-			return prepareGrokPreviewLegacyVideoJSONBody(body, contentType, payload.Model)
+	if isGrokImagineVideo(videoHead.Model) {
+		if isGrokPreviewVideo(videoHead.Model) {
+			return prepareGrokPreviewLegacyVideoJSONBody(body, contentType, videoHead.Model)
 		}
-		return prepareGrokVideoJSONBody(body, contentType, payload.Model)
+		return prepareGrokVideoJSONBody(body, contentType, videoHead.Model)
 	}
-	var buffer bytes.Buffer
-	writer := multipart.NewWriter(&buffer)
-	writeMultipartField(writer, "model", payload.Model)
-	writeMultipartField(writer, "prompt", payload.Prompt)
-	writeMultipartField(writer, "seconds", payload.Seconds)
-	writeMultipartField(writer, "size", payload.Size)
-	writeMultipartField(writer, "resolution_name", payload.ResolutionName)
-	writeMultipartField(writer, "preset", payload.Preset)
-	for index, reference := range payload.InputReference {
-		if !strings.HasPrefix(strings.TrimSpace(reference), "data:") {
-			_ = writer.WriteField("input_reference[]", reference)
-			continue
-		}
-		if err := writeMultipartDataURL(writer, "input_reference[]", reference, fmt.Sprintf("reference-%d", index+1)); err != nil {
-			return nil, "", err
-		}
-	}
-	if err := writer.Close(); err != nil {
-		return nil, "", err
-	}
-	return buffer.Bytes(), writer.FormDataContentType(), nil
+	return body, contentType, nil
 }
 
 // prepareUnifiedVideoJSONBody rewrites Ark-style seedance JSON (content array plus
@@ -652,70 +620,6 @@ func prepareResolvedModelBody(body []byte, contentType string, resolvedModelName
 	return normalized, contentType, err
 }
 
-func writeMultipartField(writer *multipart.Writer, key string, value string) {
-	if strings.TrimSpace(value) != "" {
-		_ = writer.WriteField(key, value)
-	}
-}
-
-func writeMultipartDataURL(writer *multipart.Writer, field string, dataURL string, fallbackName string) error {
-	mimeType, data, err := decodeDataURL(dataURL)
-	if err != nil {
-		return err
-	}
-	header := make(textproto.MIMEHeader)
-	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, escapeMultipartQuote(field), escapeMultipartQuote(fallbackName+dataURLExt(mimeType))))
-	header.Set("Content-Type", mimeType)
-	part, err := writer.CreatePart(header)
-	if err != nil {
-		return err
-	}
-	_, err = part.Write(data)
-	return err
-}
-
-func decodeDataURL(dataURL string) (string, []byte, error) {
-	header, content, ok := strings.Cut(dataURL, ",")
-	if !ok || !strings.HasPrefix(header, "data:") {
-		return "", nil, fmt.Errorf("invalid data url")
-	}
-	mimeType := strings.TrimPrefix(strings.Split(strings.TrimPrefix(header, "data:"), ";")[0], " ")
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-	if strings.Contains(header, ";base64") {
-		data, err := base64.StdEncoding.DecodeString(content)
-		return mimeType, data, err
-	}
-	text, err := url.PathUnescape(content)
-	return mimeType, []byte(text), err
-}
-
-func dataURLExt(mimeType string) string {
-	switch strings.ToLower(mimeType) {
-	case "image/jpeg":
-		return ".jpg"
-	case "image/png":
-		return ".png"
-	case "image/webp":
-		return ".webp"
-	case "video/mp4":
-		return ".mp4"
-	case "video/quicktime":
-		return ".mov"
-	case "audio/mpeg":
-		return ".mp3"
-	case "audio/wav", "audio/x-wav":
-		return ".wav"
-	default:
-		return ""
-	}
-}
-
-func escapeMultipartQuote(value string) string {
-	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"").Replace(value)
-}
-
 func isGrokImagineVideo(modelName string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "grok-imagine-video") || isGrokPreviewVideo(modelName)
 }
@@ -807,16 +711,6 @@ func resolveAIProxyPath(baseURL string, modelName string, path string) string {
 		}
 	}
 	return path
-}
-
-// isUnifiedJSONVideo reports gateway-native video models, which serve video on
-// OpenAI-style /videos with a unified JSON body instead of multipart.
-func isUnifiedJSONVideo(modelName string) bool {
-	model := strings.ToLower(strings.TrimSpace(modelName))
-	if strings.Contains(model, "doubao-seedance") {
-		return false
-	}
-	return strings.Contains(model, "seedance") || strings.Contains(model, "veo-") || strings.Contains(model, "omni-")
 }
 
 func isOfficialXAIBaseURL(baseURL string) bool {

@@ -1,6 +1,7 @@
 import axios, { type AxiosRequestConfig } from "axios";
 
 import i18n from "@/i18n";
+import { readFileAsDataUrl } from "@/lib/image-utils";
 import { buildApiUrl, withLocalProxy, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type RequestOptions = { signal?: AbortSignal };
@@ -15,6 +16,7 @@ export type PluginHttp = {
     url: (path: string) => string;
     post: (path: string, body?: unknown, options?: PluginHttpOptions) => Promise<unknown>;
     get: (path: string, options?: PluginHttpOptions) => Promise<unknown>;
+    referenceMedia: (file: File) => Promise<string>;
 };
 
 export type PluginPollOptions = { intervalMs?: number; timeoutMs?: number };
@@ -31,6 +33,7 @@ export type RunPluginArgs = {
     params?: Record<string, unknown>;
     signal?: AbortSignal;
     onDelta?: (text: string) => void;
+    referenceMedia?: (file: File) => Promise<string>;
 };
 
 function pluginHeaders(extra?: Record<string, string>, hasJsonBody = false): Record<string, string> {
@@ -44,7 +47,7 @@ function pluginUrl(config: AiConfig, path: string) {
     return buildApiUrl(config.baseUrl, path.startsWith("/") ? path : `/${path}`);
 }
 
-function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHttp {
+function createPluginHttp(config: AiConfig, options?: RequestOptions & Pick<RunPluginArgs, "referenceMedia">): PluginHttp {
     const run = async (method: "get" | "post", path: string, body: unknown, opts?: PluginHttpOptions) => {
         const isForm = typeof FormData !== "undefined" && body instanceof FormData;
         const response = await axios.request({
@@ -62,6 +65,7 @@ function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHtt
         url: (path) => pluginUrl(config, path),
         post: (path, body, opts) => run("post", path, body, opts),
         get: (path, opts) => run("get", path, undefined, opts),
+        referenceMedia: options?.referenceMedia || readFileAsDataUrl,
     };
 }
 
@@ -112,7 +116,7 @@ function createPoll(signal?: AbortSignal) {
  */
 export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<T> {
     const { config } = args;
-    const http = createPluginHttp(config, { signal: args.signal });
+    const http = createPluginHttp(config, { signal: args.signal, referenceMedia: args.referenceMedia });
     const request = createPluginRequest(config, { signal: args.signal });
     const poll = createPoll(args.signal);
     const runner = new Function(
@@ -179,7 +183,7 @@ export function getPluginVariables(): PluginVariable[] {
         { name: "apiKey", type: "string", desc: i18n.t("modelPlugin.variables.apiKey") },
         { name: "systemPrompt", type: "string", desc: i18n.t("modelPlugin.variables.systemPrompt") },
         { name: "reasoningEffort", type: '"auto" | "low" | "medium" | "high" | "xhigh"', desc: i18n.t("modelPlugin.variables.reasoningEffort"), capabilities: ["text"] },
-        { name: "http", type: "object", desc: i18n.t("modelPlugin.variables.http") },
+        { name: "http", type: "object", desc: `${i18n.t("modelPlugin.variables.http")} ${i18n.t("modelPlugin.referenceMediaHelp")}` },
         { name: "request", type: "function", desc: i18n.t("modelPlugin.variables.request") },
         { name: "poll", type: "function", desc: i18n.t("modelPlugin.variables.poll") },
         { name: "sleep", type: "function", desc: i18n.t("modelPlugin.variables.sleep") },
@@ -438,8 +442,8 @@ return await generateImage({
         {
             label: i18n.t("modelPlugin.templates.openai"),
             script: `/**
- * OpenAI-compatible video: POST /v1/videos (multipart), then poll GET /v1/videos/{id}.
- * Do not set Content-Type on FormData; the browser adds the boundary.
+ * OpenAI-compatible video: POST /v1/videos as JSON, then poll GET /v1/videos/{id}.
+ * http.referenceMedia uploads files on the built-in gateway and returns data URLs on direct channels.
  * @param {string} prompt
  * @param {string[]} images - reference images as data URLs
  * @param {File[]} videos - reference videos; empty when none
@@ -451,6 +455,7 @@ return await generateImage({
  * @param {string} params.resolution - e.g. "720p"
  * @param {boolean} params.generateAudio
  * @param {boolean} params.watermark
+ * @param {object} http - referenceMedia(file) returns a URL for the JSON request
  * @param {string} model
  * @param {string} baseUrl
  * @param {string} apiKey
@@ -476,43 +481,42 @@ async function generateVideo({
   apiKey,
   request,
   poll,
+  http,
 }) {
-  const form = new FormData();
-  form.set("model", model);
-  form.set("prompt", prompt);
-  form.set("seconds", String(seconds || 8));
-  form.set("size", String(size || "1280x720"));
-  form.set("resolution_name", String(resolution || "720p"));
-  form.set("generate_audio", String(generateAudio !== false));
-  form.set("watermark", String(watermark === true));
-  form.set("mode", mode);
-  if (mode === "frames") {
-    if (images[0]) {
-      form.append("first_frame", await (await fetch(images[0])).blob(), "first.png");
-    }
-    if (images[1]) {
-      form.append("last_frame", await (await fetch(images[1])).blob(), "last.png");
-    }
-  } else {
-    for (const dataUrl of images) {
-      form.append("image[]", await (await fetch(dataUrl)).blob(), "ref.png");
-    }
-  }
-  for (const file of videos) {
-    form.append("video[]", file);
-  }
-  for (const file of audios) {
-    form.append("audio[]", file);
-  }
+  const [imageUrls, videoUrls, audioUrls] = await Promise.all([
+    Promise.all(images.map(async (dataUrl) => {
+      const blob = await (await fetch(dataUrl)).blob();
+      return http.referenceMedia(new File([blob], "reference.png", { type: blob.type }));
+    })),
+    Promise.all(videos.map((file) => http.referenceMedia(file))),
+    Promise.all(audios.map((file) => http.referenceMedia(file))),
+  ]);
+  const referenceMode = mode === "reference" || images.length > 2;
+  const data = {
+    model,
+    prompt,
+    seconds: String(seconds || 8),
+    size: size || "1280x720",
+    resolution_name: resolution || "720p",
+    generate_audio: generateAudio !== false,
+    watermark: watermark === true,
+    mode: referenceMode ? "reference" : "frames",
+    ...(referenceMode
+      ? (imageUrls.length ? { images: imageUrls } : {})
+      : { ...(imageUrls[0] ? { first_frame: imageUrls[0] } : {}), ...(imageUrls[1] ? { last_frame: imageUrls[1] } : {}) }),
+    ...(videoUrls.length ? { videos: videoUrls } : {}),
+    ...(audioUrls.length ? { audios: audioUrls } : {}),
+  };
 
   const headers = {
     Authorization: \`Bearer \${apiKey}\`,
+    "Content-Type": "application/json",
   };
   const task = await request({
     method: "post",
     url: \`\${baseUrl}/v1/videos\`,
     headers,
-    data: form,
+    data,
   });
 
   return await poll(
@@ -554,6 +558,7 @@ return await generateVideo({
   apiKey,
   request,
   poll,
+  http,
 });`,
         },
         {
