@@ -113,7 +113,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     const requestConfig = resolveModelRequestConfig(config, selectedModel);
     const script = resolveModelScript(config, selectedModel);
     const remote = isGatewayModel(config, selectedModel);
-    if (script) return createPluginVideoTask(requestConfig, selectedModel, remote, script, prompt, references, options);
+    if (script) return createPluginVideoTask(requestConfig, selectedModel, script, prompt, references, options);
     assertVideoConfig(requestConfig, requestConfig.model);
     if (requestConfig.apiFormat === "gemini") return createGeminiVideoTask(requestConfig, selectedModel, prompt, references, options);
     const model = requestConfig.model;
@@ -123,8 +123,8 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     }
     if (isGrokPreviewVideoModel(model)) return createGrokPreviewVideoTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
     if (isGrokVideo) return createGrokVideoTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
-    if (isUnifiedJsonVideoModel(model)) return createUnifiedVideoTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
-    return createOpenAIVideoTask(requestConfig, selectedModel, remote, prompt, references, videoReferences, audioReferences, options);
+    if (isUnifiedJsonVideoModel(model)) return createUnifiedVideoTask(requestConfig, selectedModel, prompt, references, videoReferences, audioReferences, options);
+    return createOpenAIVideoTask(requestConfig, selectedModel, prompt, references, videoReferences, audioReferences, options);
 }
 
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
@@ -139,12 +139,14 @@ export async function pollVideoGenerationTask(config: AiConfig, task: VideoGener
     return task.provider === "seedance" ? pollSeedanceTask(requestConfig, task, remote, options) : pollOpenAIVideoTask(requestConfig, task, remote, options);
 }
 
-async function createPluginVideoTask(config: AiConfig, model: string, remote: boolean, script: string, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
+async function createPluginVideoTask(config: AiConfig, model: string, script: string, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
     if (!config.baseUrl.trim()) throw new Error(apiText("baseUrlRequired"));
     if (!config.apiKey.trim()) throw new Error(apiText("apiKeyRequired"));
-    const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
-    const videos = await Promise.all((options?.videos || []).map((video) => referenceMediaToFile(video, "ref.mp4", "invalidReferenceVideo", options)));
-    const audios = await Promise.all((options?.audios || []).map((audio) => referenceMediaToFile(audio, "ref.mp3", "invalidReferenceAudio", options)));
+    const [refs, videos, audios] = await Promise.all([
+        Promise.all(references.map((image) => referenceImageToUrl(image, options))),
+        Promise.all((options?.videos || []).map((video) => referenceMediaToUrl(video, "ref.mp4", "invalidReferenceVideo", options))),
+        Promise.all((options?.audios || []).map((audio) => referenceMediaToUrl(audio, "ref.mp3", "invalidReferenceAudio", options))),
+    ]);
     const result = videoPluginResult(
         await runModelPlugin({
             capability: "video",
@@ -154,7 +156,7 @@ async function createPluginVideoTask(config: AiConfig, model: string, remote: bo
             images: refs,
             videos,
             audios,
-            referenceMedia: (file) => remote ? uploadReferenceMedia(file, options) : readFileAsDataUrl(file),
+            referenceMedia: (file) => uploadReferenceMedia(file, options),
             params: {
                 seconds: normalizeVideoSeconds(config.videoSeconds),
                 size: normalizeVideoSize(config.size, config.vquality),
@@ -202,8 +204,7 @@ async function createGrokPreviewVideoTask(config: AiConfig, selectedModel: strin
     const path = videoCreatePath(config, model, remote);
     const official = path === "/videos/generations";
     const requestModel = official && !remote ? normalizeGrokPreviewModel(model) : model;
-    const firstFrame = official ? await resolveGrokImageUrl(config, remote, references[0]) : await imageToDataUrl(references[0]);
-    if (!firstFrame || (!firstFrame.startsWith("data:image/") && !isPublicMediaUrl(firstFrame))) throw new Error("首帧图片读取失败，请重新上传图片");
+    const firstFrame = await referenceImageToUrl(references[0], options);
     const duration = Number(normalizeGrokPreviewSeconds(config.videoSeconds, model));
     const aspectRatio = normalizeGrokVideoAspectRatio(config.size || normalizeGrokPreviewVideoSize(config.size));
     const payload = official
@@ -246,7 +247,7 @@ async function createGrokVideoTask(config: AiConfig, selectedModel: string, remo
         duration: seconds,
         aspect_ratio: normalizeGrokVideoAspectRatio(config.size || normalizeGrokVideoSize(config.size)),
         resolution: normalizeGrokVideoResolution(config.vquality),
-        ...(references.length ? { reference_images: await buildGrokImageReferences(config, remote, references) } : {}),
+        ...(references.length ? { reference_images: await buildGrokImageReferences(references, options) } : {}),
     };
 
     try {
@@ -297,13 +298,13 @@ async function createLegacyGrokVideoTask(config: AiConfig, selectedModel: string
 }
 
 /** SubRouter / new-api 风格网关把 seedance 放在 OpenAI 风格的 /videos 上，请求体是统一的 JSON。 */
-async function createUnifiedVideoTask(config: AiConfig, selectedModel: string, remote: boolean, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
+async function createUnifiedVideoTask(config: AiConfig, selectedModel: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
     if (videoReferences.length || audioReferences.length) {
         throw new Error("当前渠道的 Seedance 模型暂不支持参考视频或参考音频，请移除后重试，或切换到火山方舟渠道");
     }
     const model = config.model;
     const path = "/videos";
-    const images = await Promise.all(references.slice(0, SEEDANCE_REFERENCE_LIMITS.images).map((image) => resolveGrokImageUrl(config, remote, image)));
+    const images = await Promise.all(references.slice(0, SEEDANCE_REFERENCE_LIMITS.images).map((image) => referenceImageToUrl(image, options)));
     const payload = {
         model,
         prompt,
@@ -327,13 +328,13 @@ async function createUnifiedVideoTask(config: AiConfig, selectedModel: string, r
     }
 }
 
-async function createOpenAIVideoTask(config: AiConfig, selectedModel: string, remote: boolean, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
+async function createOpenAIVideoTask(config: AiConfig, selectedModel: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
     const model = config.model;
     const path = "/videos";
     const [images, videos, audios] = await Promise.all([
-        Promise.all(references.map((image) => resolveGrokImageUrl(config, remote, image, options))),
-        Promise.all(videoReferences.map((video) => referenceMediaToUrl(remote, video, "ref.mp4", "invalidReferenceVideo", options))),
-        Promise.all(audioReferences.map((audio) => referenceMediaToUrl(remote, audio, "ref.mp3", "invalidReferenceAudio", options))),
+        Promise.all(references.map((image) => referenceImageToUrl(image, options))),
+        Promise.all(videoReferences.map((video) => referenceMediaToUrl(video, "ref.mp4", "invalidReferenceVideo", options))),
+        Promise.all(audioReferences.map((audio) => referenceMediaToUrl(audio, "ref.mp3", "invalidReferenceAudio", options))),
     ]);
     const mode = resolveVideoMode(config.videoMode, images.length);
     const size = normalizeVideoSize(config.size, config.vquality);
@@ -362,17 +363,16 @@ async function createOpenAIVideoTask(config: AiConfig, selectedModel: string, re
     }
 }
 
-async function resolveGrokImageUrl(config: AiConfig, remote: boolean, image: ReferenceImage, options?: RequestOptions) {
-    const directUrl = image.url || image.dataUrl;
-    if (isPublicMediaUrl(directUrl)) return directUrl;
+async function referenceImageToUrl(image: ReferenceImage, options?: RequestOptions) {
+    const directUrl = [image.url, image.dataUrl].find((url) => url && isPublicMediaUrl(url));
+    if (directUrl) return directUrl;
     const dataUrl = await imageToDataUrl(image, options);
     if (!dataUrl?.startsWith("data:image/")) throw new Error("参考图读取失败，请换一张图片或重新上传");
-    if (remote) return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }), options);
-    return dataUrl;
+    return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }), options);
 }
 
-async function buildGrokImageReferences(config: AiConfig, remote: boolean, references: ReferenceImage[]) {
-    return Promise.all(references.slice(0, 4).map((image) => resolveGrokImageUrl(config, remote, image)));
+async function buildGrokImageReferences(references: ReferenceImage[], options?: RequestOptions) {
+    return Promise.all(references.slice(0, 4).map((image) => referenceImageToUrl(image, options)));
 }
 
 async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, remote: boolean, options?: RequestOptions): Promise<VideoGenerationTaskState> {
@@ -409,7 +409,7 @@ async function createSeedanceTask(config: AiConfig, selectedModel: string, remot
     assertSeedanceVideoReferences(videoReferences);
     assertSeedanceAudioReferences(audioReferences);
     const model = config.model;
-    const content = await buildSeedanceContent(config, remote, prompt, references, videoReferences, audioReferences);
+    const content = await buildSeedanceContent(prompt, references, videoReferences, audioReferences, options);
     if (!content.length) throw new Error(apiText("videoPromptRequired"));
     const payload = {
         model,
@@ -479,61 +479,50 @@ function seedanceApiUrl(config: AiConfig, remote: boolean, taskId?: string) {
     return buildApiUrl(config.baseUrl, `/contents/generations/tasks${taskId ? `/${encodeURIComponent(taskId)}` : ""}`);
 }
 
-async function buildSeedanceContent(config: AiConfig, remote: boolean, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[]) {
+async function buildSeedanceContent(prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions) {
     const content: Array<Record<string, unknown>> = [];
     const text = buildSeedancePromptText(prompt, references, videoReferences, audioReferences);
     if (text) content.push({ type: "text", text });
     for (const image of references.slice(0, SEEDANCE_REFERENCE_LIMITS.images)) {
-        content.push({ type: "image_url", image_url: { url: await resolveSeedanceImageUrl(config, remote, image) }, role: "reference_image" });
+        content.push({ type: "image_url", image_url: { url: await resolveSeedanceImageUrl(image, options) }, role: "reference_image" });
     }
     for (const video of videoReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.videos)) {
-        content.push({ type: "video_url", video_url: { url: await resolveSeedanceVideoUrl(remote, video) }, role: "reference_video" });
+        content.push({ type: "video_url", video_url: { url: video.url.startsWith("asset://") ? video.url : await referenceMediaToUrl(video, "ref.mp4", "invalidReferenceVideo", options) }, role: "reference_video" });
     }
     for (const audio of audioReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.audios)) {
-        content.push({ type: "audio_url", audio_url: { url: await resolveSeedanceAudioUrl(remote, audio) }, role: "reference_audio" });
+        content.push({ type: "audio_url", audio_url: { url: audio.url.startsWith("asset://") ? audio.url : await referenceMediaToUrl(audio, "ref.mp3", "invalidReferenceAudio", options) }, role: "reference_audio" });
     }
     return content;
 }
 
-async function resolveSeedanceImageUrl(config: AiConfig, remote: boolean, image: ReferenceImage) {
-    const directUrl = image.url || image.dataUrl;
-    if (isPublicMediaUrl(directUrl) || directUrl.startsWith("asset://")) return directUrl;
-    const dataUrl = await imageToDataUrl(image);
-    if (!dataUrl) throw new Error(apiText("referenceImageReadFailed"));
-    if (remote) return uploadReferenceMedia(dataUrlToFile({ ...image, dataUrl }));
-    return dataUrl;
+async function resolveSeedanceImageUrl(image: ReferenceImage, options?: RequestOptions) {
+    const assetUrl = [image.url, image.dataUrl].find((url) => url?.startsWith("asset://"));
+    return assetUrl || referenceImageToUrl(image, options);
 }
 
-async function resolveSeedanceVideoUrl(remote: boolean, video: ReferenceVideo) {
-    if (isPublicMediaUrl(video.url) || video.url.startsWith("asset://")) return video.url;
-    let blob: Blob | null = null;
-    if (video.storageKey) blob = await getMediaBlob(video.storageKey);
-    if (!blob && video.url?.startsWith("blob:")) blob = await (await fetch(video.url)).blob();
-    if (!blob) throw new Error(apiText("invalidReferenceVideo"));
-    const file = new File([blob], video.name || "reference-video.mp4", { type: video.type || blob.type || "video/mp4" });
-    return remote ? uploadReferenceMedia(file) : blobToDataUrl(blob);
-}
-
-async function resolveSeedanceAudioUrl(remote: boolean, audio: ReferenceAudio) {
-    if (isPublicMediaUrl(audio.url) || audio.url.startsWith("asset://")) return audio.url;
-    let blob: Blob | null = null;
-    if (audio.storageKey) blob = await getMediaBlob(audio.storageKey);
-    if (!blob && audio.url?.startsWith("blob:")) blob = await (await fetch(audio.url)).blob();
-    if (!blob) throw new Error(apiText("invalidReferenceAudio"));
-    const file = new File([blob], audio.name || "reference-audio.mp3", { type: audio.type || blob.type || "audio/mpeg" });
-    return remote ? uploadReferenceMedia(file) : blobToDataUrl(blob);
-}
-
-/** 本地素材没有公网地址时，先传给后端换一个可被服务商回source的 URL。 */
-async function uploadReferenceMedia(file: File, options?: RequestOptions) {
+/** 两种渠道共用站内素材上传；已有公网 URL 直接保留。 */
+async function uploadReferenceMedia(file: File | string, options?: RequestOptions) {
+    if (typeof file === "string" && isPublicMediaUrl(file)) return file;
     const token = useUserStore.getState().token;
-    if (!token) throw new Error("使用本地参考素材需要先登录，并在服务端配置 PUBLIC_BASE_URL");
+    if (!token) throw new Error("请先登录本站上传本地参考素材，或使用可公开访问的 HTTP/HTTPS 素材链接");
+    if (typeof file === "string") {
+        const response = await fetch(file, { signal: options?.signal });
+        if (!response.ok) throw new Error("参考素材读取失败，请重新选择素材");
+        const blob = await response.blob();
+        file = new File([blob], "reference", { type: blob.type });
+    }
     const body = new FormData();
     body.append("file", file, file.name);
-    const response = await axios.post<ApiEnvelope<ReferenceMediaUploadResponse>>("/api/v1/media/references", body, { headers: { Authorization: `Bearer ${token}` }, signal: options?.signal });
-    const payload = unwrapEnvelope(response.data, "参考素材上传失败");
-    if (!payload.url) throw new Error("参考素材上传后没有返回公网 URL");
-    return payload.url;
+    try {
+        const response = await axios.post<ApiEnvelope<ReferenceMediaUploadResponse>>("/api/v1/media/references", body, { headers: { Authorization: `Bearer ${token}` }, signal: options?.signal });
+        const payload = unwrapEnvelope(response.data, "参考素材上传失败");
+        if (!isPublicMediaUrl(payload.url || "")) throw new Error("参考素材上传后没有返回 HTTP/HTTPS 公网链接");
+        return payload.url;
+    } catch (error) {
+        if (axios.isCancel(error) || options?.signal?.aborted) throw error;
+        if (axios.isAxiosError(error) && error.response?.status === 401) throw new Error("登录已失效，请重新登录后上传参考素材");
+        throw new Error(readAxiosError(error, "参考素材上传失败"));
+    }
 }
 
 async function videoResultFromUrl(url: string, config: AiConfig, remote: boolean, task?: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationResult> {
@@ -666,10 +655,10 @@ async function fileToGeminiInline(file: File): Promise<GeminiInlineData> {
     return parseDataUrlInline(await readFileAsDataUrl(file), file.type || "application/octet-stream");
 }
 
-async function referenceMediaToUrl(remote: boolean, item: ReferenceVideo | ReferenceAudio, fallbackName: string, errorKey: "invalidReferenceVideo" | "invalidReferenceAudio", options?: RequestOptions) {
-    if (isPublicMediaUrl(item.url) || (!remote && item.url.startsWith("data:"))) return item.url;
+async function referenceMediaToUrl(item: ReferenceVideo | ReferenceAudio, fallbackName: string, errorKey: "invalidReferenceVideo" | "invalidReferenceAudio", options?: RequestOptions) {
+    if (isPublicMediaUrl(item.url)) return item.url;
     const file = await referenceMediaToFile(item, fallbackName, errorKey, options);
-    return remote ? uploadReferenceMedia(file, options) : readFileAsDataUrl(file);
+    return uploadReferenceMedia(file, options);
 }
 
 async function referenceMediaToFile(item: { name: string; type?: string; url?: string; storageKey?: string }, fallbackName: string, errorKey: "invalidReferenceVideo" | "invalidReferenceAudio", options?: RequestOptions) {
@@ -678,7 +667,9 @@ async function referenceMediaToFile(item: { name: string; type?: string; url?: s
         const url = item.storageKey ? await resolveMediaUrl(item.storageKey, item.url || "") : item.url || "";
         if (!url) throw new Error(apiText(errorKey));
         try {
-            blob = await (await fetch(url, { signal: options?.signal })).blob();
+            const response = await fetch(url, { signal: options?.signal });
+            if (!response.ok) throw new Error(apiText(errorKey));
+            blob = await response.blob();
         } catch (error) {
             if (error instanceof DOMException && error.name === "AbortError") throw error;
             throw new Error(apiText(errorKey));
@@ -915,11 +906,3 @@ function delay(ms: number, signal?: AbortSignal) {
     });
 }
 
-function blobToDataUrl(blob: Blob) {
-    return new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = () => reject(new Error(apiText("localAssetReadFailed")));
-        reader.readAsDataURL(blob);
-    });
-}

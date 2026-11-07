@@ -2440,10 +2440,8 @@ function InfiniteCanvasPage() {
             let pendingChildIds: string[] = [];
 
             try {
-                const generationContext = await hydrateNodeGenerationContext(
-                    buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? t("canvas.projectPage.editTextPrompt", { source: sourceTextContent, prompt }) : prompt),
-                    { signal: runController.signal },
-                );
+                const rawContext = buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? t("canvas.projectPage.editTextPrompt", { source: sourceTextContent, prompt }) : prompt);
+                const generationContext = mode === "video" ? rawContext : await hydrateNodeGenerationContext(rawContext, { signal: runController.signal });
                 const effectivePrompt = generationContext.prompt.trim();
                 if (runController.signal.aborted || (!effectivePrompt && (mode === "text" || mode === "audio"))) return;
                 if (markSourceStatus) setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...(node.type === CanvasNodeType.Config ? {} : { prompt }), status: NODE_STATUS_LOADING, errorDetails: undefined } } : node)));
@@ -2870,7 +2868,8 @@ function InfiniteCanvasPage() {
             setRunningNodeId(node.id);
             const controller = startGenerationRequest(node.id, sourceNode.id, node.id);
             try {
-                const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""), { signal: controller.signal });
+                const rawContext = hasSavedImageMetadata ? null : buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || "");
+                const context = !rawContext || node.type === CanvasNodeType.Video ? rawContext : await hydrateNodeGenerationContext(rawContext, { signal: controller.signal });
                 const prompt = (savedImageMetadata?.prompt || context?.prompt || "").trim();
                 if (!prompt) {
                     message.warning(t("canvas.projectPage.retryPromptMissing"));

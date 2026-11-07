@@ -16,7 +16,7 @@ export type PluginHttp = {
     url: (path: string) => string;
     post: (path: string, body?: unknown, options?: PluginHttpOptions) => Promise<unknown>;
     get: (path: string, options?: PluginHttpOptions) => Promise<unknown>;
-    referenceMedia: (file: File) => Promise<string>;
+    referenceMedia: (file: File | string) => Promise<string>;
 };
 
 export type PluginPollOptions = { intervalMs?: number; timeoutMs?: number };
@@ -27,13 +27,13 @@ export type RunPluginArgs = {
     config: AiConfig;
     prompt?: string;
     images?: string[];
-    videos?: File[];
-    audios?: File[];
+    videos?: string[];
+    audios?: string[];
     messages?: unknown[];
     params?: Record<string, unknown>;
     signal?: AbortSignal;
     onDelta?: (text: string) => void;
-    referenceMedia?: (file: File) => Promise<string>;
+    referenceMedia?: (file: File | string) => Promise<string>;
 };
 
 function pluginHeaders(extra?: Record<string, string>, hasJsonBody = false): Record<string, string> {
@@ -65,7 +65,7 @@ function createPluginHttp(config: AiConfig, options?: RequestOptions & Pick<RunP
         url: (path) => pluginUrl(config, path),
         post: (path, body, opts) => run("post", path, body, opts),
         get: (path, opts) => run("get", path, undefined, opts),
-        referenceMedia: options?.referenceMedia || readFileAsDataUrl,
+        referenceMedia: options?.referenceMedia || ((file) => typeof file === "string" ? Promise.resolve(file) : readFileAsDataUrl(file)),
     };
 }
 
@@ -174,8 +174,8 @@ export function getPluginVariables(): PluginVariable[] {
     return [
         { name: "prompt", type: "string", desc: i18n.t("modelPlugin.variables.prompt"), capabilities: ["image", "video", "audio"] },
         { name: "images", type: "string[]", desc: i18n.t("modelPlugin.variables.images"), capabilities: ["image", "video"] },
-        { name: "videos", type: "File[]", desc: i18n.t("modelPlugin.variables.videos"), capabilities: ["video"] },
-        { name: "audios", type: "File[]", desc: i18n.t("modelPlugin.variables.audios"), capabilities: ["video"] },
+        { name: "videos", type: "string[]", desc: i18n.t("modelPlugin.variables.videos"), capabilities: ["video"] },
+        { name: "audios", type: "string[]", desc: i18n.t("modelPlugin.variables.audios"), capabilities: ["video"] },
         { name: "messages", type: "{ role, content }[]", desc: i18n.t("modelPlugin.variables.messages"), capabilities: ["text"] },
         { name: "params", type: "object", desc: i18n.t("modelPlugin.variables.params") },
         { name: "model", type: "string", desc: i18n.t("modelPlugin.variables.model") },
@@ -443,11 +443,11 @@ return await generateImage({
             label: i18n.t("modelPlugin.templates.openai"),
             script: `/**
  * OpenAI-compatible video: POST /v1/videos as JSON, then poll GET /v1/videos/{id}.
- * http.referenceMedia uploads files on the built-in gateway and returns data URLs on direct channels.
+ * Reference media is prepared as public HTTP/HTTPS URLs before this script runs.
  * @param {string} prompt
- * @param {string[]} images - reference images as data URLs
- * @param {File[]} videos - reference videos; empty when none
- * @param {File[]} audios - reference audio; empty when none
+ * @param {string[]} images - public reference image URLs
+ * @param {string[]} videos - public reference video URLs; empty when none
+ * @param {string[]} audios - public reference audio URLs; empty when none
  * @param {object} params
  * @param {string} params.mode - "frames" uses first/last frame fields; "reference" sends all images as references. More than 2 images become "reference".
  * @param {string|number} params.seconds - duration
@@ -455,7 +455,6 @@ return await generateImage({
  * @param {string} params.resolution - e.g. "720p"
  * @param {boolean} params.generateAudio
  * @param {boolean} params.watermark
- * @param {object} http - referenceMedia(file) returns a URL for the JSON request
  * @param {string} model
  * @param {string} baseUrl
  * @param {string} apiKey
@@ -481,16 +480,7 @@ async function generateVideo({
   apiKey,
   request,
   poll,
-  http,
 }) {
-  const [imageUrls, videoUrls, audioUrls] = await Promise.all([
-    Promise.all(images.map(async (dataUrl) => {
-      const blob = await (await fetch(dataUrl)).blob();
-      return http.referenceMedia(new File([blob], "reference.png", { type: blob.type }));
-    })),
-    Promise.all(videos.map((file) => http.referenceMedia(file))),
-    Promise.all(audios.map((file) => http.referenceMedia(file))),
-  ]);
   const referenceMode = mode === "reference" || images.length > 2;
   const data = {
     model,
@@ -502,10 +492,10 @@ async function generateVideo({
     watermark: watermark === true,
     mode: referenceMode ? "reference" : "frames",
     ...(referenceMode
-      ? (imageUrls.length ? { images: imageUrls } : {})
-      : { ...(imageUrls[0] ? { first_frame: imageUrls[0] } : {}), ...(imageUrls[1] ? { last_frame: imageUrls[1] } : {}) }),
-    ...(videoUrls.length ? { videos: videoUrls } : {}),
-    ...(audioUrls.length ? { audios: audioUrls } : {}),
+      ? (images.length ? { images } : {})
+      : { ...(images[0] ? { first_frame: images[0] } : {}), ...(images[1] ? { last_frame: images[1] } : {}) }),
+    ...(videos.length ? { videos } : {}),
+    ...(audios.length ? { audios } : {}),
   };
 
   const headers = {
@@ -558,7 +548,6 @@ return await generateVideo({
   apiKey,
   request,
   poll,
-  http,
 });`,
         },
         {
@@ -568,9 +557,9 @@ return await generateVideo({
  * First/last-frame mode: images[0] -> image, images[1] -> lastFrame.
  * Reference mode: all images -> referenceImages.
  * @param {string} prompt
- * @param {string[]} images - reference images as data URLs
- * @param {File[]} videos - reference videos; empty when none
- * @param {File[]} audios - reference audio; empty when none
+ * @param {string[]} images - public reference image URLs
+ * @param {string[]} videos - public reference video URLs; empty when none
+ * @param {string[]} audios - public reference audio URLs; empty when none
  * @param {object} params
  * @param {string} params.mode - "frames" or "reference"
  * @param {string|number} params.seconds - sent as durationSeconds
@@ -579,6 +568,7 @@ return await generateVideo({
  * @param {string} params.resolution - e.g. "720p"
  * @param {boolean} params.generateAudio
  * @param {boolean} params.watermark - sent as addWatermark
+ * @param {AbortSignal} signal
  * @param {string} model
  * @param {string} baseUrl
  * @param {string} apiKey
@@ -600,6 +590,7 @@ async function generateVideo({
     generateAudio,
     watermark,
   },
+  signal,
   model,
   baseUrl,
   apiKey,
@@ -607,23 +598,19 @@ async function generateVideo({
   poll,
 }) {
   async function toInline(source) {
-    if (typeof source === "string") {
-      const match = source.match(/^data:([^;]+);base64,(.*)$/);
-      return {
-        bytesBase64Encoded: match ? match[2] : "",
-        mimeType: match ? match[1] : "image/png",
-      };
-    }
+    const response = await fetch(source, { signal });
+    if (!response.ok) throw new Error("Failed to read reference media");
+    const blob = await response.blob();
     const dataUrl = await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result || ""));
       reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(source);
+      reader.readAsDataURL(blob);
     });
     const match = String(dataUrl).match(/^data:([^;]+);base64,(.*)$/);
     return {
       bytesBase64Encoded: match ? match[2] : "",
-      mimeType: match ? match[1] : (source.type || "application/octet-stream"),
+      mimeType: match ? match[1] : (blob.type || "application/octet-stream"),
     };
   }
 
@@ -653,9 +640,9 @@ async function generateVideo({
     }
   } else {
     instance.referenceImages = [];
-    for (const dataUrl of images) {
+    for (const url of images) {
       instance.referenceImages.push({
-        image: await toInline(dataUrl),
+        image: await toInline(url),
         referenceType: "asset",
       });
     }
@@ -714,6 +701,7 @@ return await generateVideo({
   videos,
   audios,
   params,
+  signal,
   model,
   baseUrl,
   apiKey,

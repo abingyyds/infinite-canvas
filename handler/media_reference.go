@@ -33,7 +33,7 @@ type referenceMediaUploadResult struct {
 func UploadReferenceMedia(w http.ResponseWriter, r *http.Request) {
 	publicBaseURL := strings.TrimRight(strings.TrimSpace(config.Cfg.PublicBaseURL), "/")
 	if publicBaseURL == "" {
-		Fail(w, "未配置 PUBLIC_BASE_URL，无法把本地参考素材提供给火山方舟访问")
+		Fail(w, "未配置 PUBLIC_BASE_URL，无法为本地参考素材生成公网链接")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, referenceMediaMaxBytes+1)

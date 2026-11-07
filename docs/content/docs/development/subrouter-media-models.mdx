@@ -50,7 +50,7 @@ description: SubRouter 网关上各图片 / 视频模型的端点、请求体形
 
 `metadata.ratio` 传 `adaptive` 和具体比例都可以；`resolution` 用 `480p` / `720p` / `1080p`。
 
-本站的视频创建请求统一使用 JSON，后端不再按模型名转换为 multipart。默认兼容接口保留 `seconds`、`size`、`resolution_name`、布尔值 `generate_audio` / `watermark` 和参考素材字段；上面的 `duration` / `metadata` 结构仍用于对应的网关协议。内置网关的本地素材先独立上传再传 URL，直连渠道可使用 Data URL。
+本站的视频创建请求统一使用 JSON，后端不再按模型名转换为 multipart。默认兼容接口保留 `seconds`、`size`、`resolution_name`、布尔值 `generate_audio` / `watermark` 和参考素材字段；上面的 `duration` / `metadata` 结构仍用于对应的网关协议。内置网关和自定义渠道均保留已有 HTTP/HTTPS URL，本地素材先通过本站登录上传，再在 JSON 中传 URL。视频脚本的 `images` / `videos` / `audios` 均为 URL 数组；旧脚本按 dataURL / File 处理素材的逻辑需手动调整，Gemini 原生内联字节仍按其协议转换。
 
 轮询与取片：
 
