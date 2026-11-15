@@ -48,6 +48,7 @@ export default {
     generation: { pending: ["正在创建图片", "马上就好了", "再等等", "正在整理细节"] },
     imageReferences: { label: "图片{{index}}", separator: "、", promptPrefix: "参考图片编号：{{labels}}。请按这些编号理解提示词中的图片引用。\n\n{{prompt}}" },
     modelPlugin: {
+        hostedOnly: "托管版仅允许运行随应用发布的模型脚本。",
         referenceMediaHelp: "视频脚本的 images/videos/audios 已是公网 URL 数组，可直接放入 JSON。http.referenceMedia(fileOrUrl) 保留已有链接，本地素材通过本站登录上传；内置网关与自定义渠道共用上传入口。",
         pollTimeout: "插件轮询超时，请检查调用脚本或稍后重试", executionFailed: "模型调用脚本执行失败：{{message}}", noImages: "模型调用脚本没有返回图片",
         variables: { prompt: "用户输入的提示词（已拼接系统提示词）", images: "参考图字符串数组；生图脚本为 dataURL，视频脚本为公网 HTTP/HTTPS URL", videos: "参考视频公网 URL 字符串数组，可直接放入 JSON；无参考时为空数组", audios: "参考音频公网 URL 字符串数组，可直接放入 JSON；无参考时为空数组", messages: "对话消息数组，含系统消息", params: "生成参数：生图 {size,quality,count,background}、视频 {mode,seconds,size,resolution,ratio,generateAudio,watermark}（mode 为 frames 首尾帧或 reference 全能参考；超过 2 张图时为 reference）、音频 {voice,format,speed,instructions}", model: "模型名称（不含渠道前缀）", baseUrl: "渠道接口地址（原样，未拼 /v1）", apiKey: "渠道 API Key，请求头里自己带上", systemPrompt: "系统提示词原文", reasoningEffort: "文本推理强度；auto 表示由脚本决定是否传递", http: "便捷请求：http.post(path, body, {headers,params,responseType})、http.get(path, opts)、http.url(path)；默认带 Authorization: Bearer apiKey，可用 headers 覆盖；path 相对时按 baseUrl 拼 /v1", request: "原始请求 request({ method, url, headers, params, data, responseType })，不加任何默认头，鉴权头自己写；url 相对时按 baseUrl 拼接（不加 /v1）", poll: "轮询 poll(request, extract, {intervalMs,timeoutMs})，extract 返回真值即结束", sleep: "sleep(ms) 延时", signal: "取消信号，可透传给 http/request", onDelta: "onDelta(text) 推送流式文本（文本模型）" },
@@ -309,7 +310,7 @@ export default {
         controls: { ratio: "比例", duplicate: "复制", delete: "删除", images: "{{count}} 张", texts: "{{count}} 条", generations: "{{count}} 次", reasoning: "推理" },
         generation: { interrupted: "页面刷新后生成已中断，请重新生成。", front: "正面视角", rotateRight: "向右旋转 {{angle}} 度", rotateLeft: "向左旋转 {{angle}} 度", level: "水平视角", topDown: "俯视 {{angle}} 度", lowAngle: "仰视 {{angle}} 度", angleLabel: "AI 多角度：{{horizontal}}，{{pitch}}，镜头距离 {{distance}}，{{lens}}镜头", anglePrompt: "基于参考图重新生成同一主体的新视角，保持主体、颜色、材质和画面风格一致，不要只做透视变形。{{angle}}。" },
         agentOps: { add_node: "新增节点", update_node: "更新节点", delete_node: "删除节点", delete_connections: "删除连线", connect_nodes: "连接", set_viewport: "调整视图", select_nodes: "选择节点", run_generation: "触发生成" },
-        pluginErrors: { invalidExport: "插件未导出有效对象", missingFields: "插件缺少 id 或 nodes", downloadFailed: "下载失败 (HTTP {{status}})", registryFailed: "获取官方插件列表失败 (HTTP {{status}})" },
+        pluginErrors: { hostedOnly: "托管版仅支持随应用发布的官方插件。", invalidExport: "插件未导出有效对象", missingFields: "插件缺少 id 或 nodes", downloadFailed: "下载失败 (HTTP {{status}})", registryFailed: "获取官方插件列表失败 (HTTP {{status}})" },
         shortcut: {
             dragCanvas: "拖动画布",
             pan: "平移视图",
@@ -481,6 +482,7 @@ export default {
         export: "导出配置",
         imported: "配置与用户偏好已导入",
         importedDirectConfig: "已导入本地直连配置",
+        pasteImportedKey: "请在渠道设置中粘贴 API Key。链接只导入渠道地址。",
         importedChannelCreated: "已新增渠道“{{name}}”，原有渠道未改动",
         importedChannelUpdated: "已更新渠道“{{name}}”的连接配置",
         importedChannelBaseUrlRequired: "导入链接缺少 Base URL，未修改任何渠道",

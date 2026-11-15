@@ -70,10 +70,19 @@ export function initAnalytics() {
 }
 
 // Report SPA route changes to every enabled analytics provider.
-export function trackPageview(path: string) {
+export function trackPageview(pathname: string) {
     try {
+        const page = new URL(window.location.href);
+        page.search = "";
+        page.hash = "";
+        const path = pathname.split(/[?#]/, 1)[0];
+        let pageReferrer = "";
+        if (document.referrer) {
+            const referrer = new URL(document.referrer);
+            pageReferrer = referrer.origin + referrer.pathname;
+        }
         if (active.ga4 && window.gtag) {
-            window.gtag("event", "page_view", { page_path: path, page_location: window.location.href });
+            window.gtag("event", "page_view", { page_path: path, page_location: page.href, page_referrer: pageReferrer });
         }
         if (active.baidu && window._hmt) {
             window._hmt.push(["_trackPageview", path]);

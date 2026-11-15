@@ -114,3 +114,45 @@ func TestNormalizeSettingsPublishesEnabledChannelModelsAndRepairsDefaults(t *tes
 		t.Fatalf("default video model = %q, want seedance", channel.DefaultVideoModel)
 	}
 }
+
+func TestSavedChannelKeyBinding(t *testing.T) {
+	savedChannel := model.ModelChannel{Name: "Saved", Protocol: "openai", BaseURL: "https://models.example.test/v1", APIKey: "test-only"}
+	saved := []model.ModelChannel{savedChannel}
+	for _, tc := range []struct {
+		base    string
+		index   int
+		allowed bool
+	}{
+		{"https://models.example.test", 0, true},
+		{"https://MODELS.example.test/v1/", -1, true},
+		{"http://models.example.test/v1", 0, false},
+		{"https://models.example.test/other/v1", 0, false},
+		{"https://other.example.test/v1", 0, false},
+		{"https://other.example.test/v1", -1, false},
+		{"https://models.example.test/v1?option=1", 0, false},
+	} {
+		incoming := savedChannel
+		incoming.BaseURL = tc.base
+		incoming.APIKey = ""
+		key, ok := findSavedChannelKey(incoming, saved, tc.index)
+		if ok != tc.allowed || (key == savedChannel.APIKey) != tc.allowed {
+			t.Errorf("unexpected key reuse decision for %s at %d", tc.base, tc.index)
+		}
+	}
+}
+
+func TestSaveChannelWithChangedEndpointRequiresReplacementKey(t *testing.T) {
+	existing := model.ModelChannel{Name: "Saved", Protocol: "openai", BaseURL: "https://models.example.test/v1", APIKey: "test-only", Enabled: true}
+	saved := model.Settings{Private: model.PrivateSetting{Channels: []model.ModelChannel{existing}}}
+	changed := existing
+	changed.BaseURL = "https://replacement.example.test/v1"
+	changed.APIKey = ""
+	input := model.Settings{Private: model.PrivateSetting{Channels: []model.ModelChannel{changed}}}
+	if err := keepPrivateAPIKeys(&input, saved); err == nil || input.Private.Channels[0].APIKey != "" {
+		t.Fatal("address change accepted without a replacement key")
+	}
+	input.Private.Channels[0].APIKey = "replacement"
+	if err := keepPrivateAPIKeys(&input, saved); err != nil || input.Private.Channels[0].APIKey != "replacement" {
+		t.Fatalf("replacement key was rejected: %v", err)
+	}
+}

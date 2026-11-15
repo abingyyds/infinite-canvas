@@ -100,11 +100,15 @@ func TestMediaRedirectCredentialsStayOnOrigin(t *testing.T) {
 	} {
 		redirect := httptest.NewRequest(http.MethodGet, tc.target, nil)
 		redirect.Header.Set("Authorization", "Bearer fixture")
+		redirect.Header.Set("X-Goog-Api-Key", "fixture")
 		if err := newMediaClient().CheckRedirect(redirect, []*http.Request{original}); err != nil {
 			t.Fatal(err)
 		}
 		if got := redirect.Header.Get("Authorization"); got != tc.auth {
 			t.Errorf("redirect to %s has unexpected Authorization header", tc.target)
+		}
+		if got := redirect.Header.Get("X-Goog-Api-Key"); (got == "fixture") != (tc.auth != "") {
+			t.Errorf("redirect to %s has unexpected Gemini authentication header", tc.target)
 		}
 	}
 }

@@ -9,6 +9,13 @@ COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
 RUN bun run build
 
+# 官方插件和应用从同一份源码构建，托管版按本地清单加载。
+FROM node:22-alpine AS plugin-build
+
+WORKDIR /app/plugins/canvas
+COPY plugins/canvas ./
+RUN npm --prefix registry ci --no-audit --no-fund && npm --prefix registry run build
+
 # 构建 Go 后端入口。
 FROM golang:1.25-alpine AS api-build
 
@@ -31,6 +38,7 @@ ENV PORT=3000
 ENV API_PORT=18080
 
 COPY --from=web-build /app/web/dist /usr/share/nginx/html
+COPY --from=plugin-build /app/plugins/canvas/registry/dist/ /usr/share/nginx/html/official-plugins/
 COPY --from=api-build /server /app/server
 # 官方镜像的 20-envsubst-on-templates.sh 会把 ${PORT}/${API_PORT} 渲染进 default.conf。
 COPY nginx.conf /etc/nginx/templates/default.conf.template

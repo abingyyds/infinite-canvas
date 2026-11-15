@@ -1,4 +1,8 @@
 import { PLUGIN_REGISTRY_URL } from "@/constant/env";
+import { BUNDLED_PLUGINS, HOSTED_CANVAS } from "@/constant/runtime-config";
+import i18n from "@/i18n";
+
+const bundledRegistryPath = "/official-plugins/official-plugins.json";
 
 // An official registry item whose entry has been resolved to an absolute URL.
 export type OfficialPluginEntry = {
@@ -14,8 +18,9 @@ type RawEntry = { id?: string; name?: string; version?: string; description?: st
 type RawManifest = { plugins?: RawEntry[] };
 
 // Fetch the official registry and resolve relative entries against its URL for the existing URL installation flow.
-export async function fetchOfficialPlugins(registryUrl: string = PLUGIN_REGISTRY_URL): Promise<OfficialPluginEntry[]> {
-    const response = await fetch(registryUrl, { headers: { accept: "application/json" } });
+export async function fetchOfficialPlugins(registryUrl: string = BUNDLED_PLUGINS ? bundledRegistryPath : PLUGIN_REGISTRY_URL): Promise<OfficialPluginEntry[]> {
+    const registry = new URL(HOSTED_CANVAS ? bundledRegistryPath : registryUrl, window.location.origin);
+    const response = await fetch(registry, { headers: { accept: "application/json" }, ...(HOSTED_CANVAS ? { redirect: "error" } : {}) });
     if (!response.ok) throw new Error(i18n.t("canvas.pluginErrors.registryFailed", { status: response.status }));
     const data = (await response.json()) as RawManifest;
     const list = Array.isArray(data?.plugins) ? data.plugins : [];
@@ -27,7 +32,7 @@ export async function fetchOfficialPlugins(registryUrl: string = PLUGIN_REGISTRY
             version: item.version || "0.0.0",
             description: item.description,
             icon: item.icon,
-            url: item.url ? item.url : new URL(item.entry as string, registryUrl).toString(),
+            url: new URL(item.url || (item.entry as string), registry).toString(),
         }));
 }
 
@@ -47,4 +52,3 @@ function compareSemver(a: string, b: string): number {
 export function hasUpgrade(installedVersion: string, remoteVersion: string): boolean {
     return compareSemver(remoteVersion, installedVersion) > 0;
 }
-import i18n from "@/i18n";

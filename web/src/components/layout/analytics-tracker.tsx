@@ -8,8 +8,8 @@ export function AnalyticsTracker() {
     const location = useLocation();
 
     useEffect(() => {
-        trackPageview(`${location.pathname}${location.search}`);
-    }, [location.pathname, location.search]);
+        trackPageview(location.pathname);
+    }, [location.pathname]);
 
     return null;
 }

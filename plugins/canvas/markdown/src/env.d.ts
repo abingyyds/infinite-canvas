@@ -5,6 +5,3 @@ declare module "*.css" {
 }
 
 // 重依赖从 CDN 动态加载,不打进 bundle;此处声明以便 TS 提示
-declare module "https://esm.sh/marked@14" {
-    export const marked: { parse: (src: string) => string };
-}

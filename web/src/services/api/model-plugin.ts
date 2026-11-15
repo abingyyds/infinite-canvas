@@ -1,3 +1,5 @@
+import { HOSTED_CANVAS } from "@/constant/runtime-config";
+import { downloadGeminiVideo } from "./gemini-video-download";
 import axios, { type AxiosRequestConfig } from "axios";
 
 import i18n from "@/i18n";
@@ -115,6 +117,11 @@ function createPoll(signal?: AbortSignal) {
  * The script still runs as an async function body and must `return` the result.
  */
 export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<T> {
+    if (HOSTED_CANVAS && !Object.values(getPluginTemplates()).some((templates) =>
+        templates.some(({ script }) => script.trim() === args.script.trim()),
+    )) {
+        throw new Error(i18n.t("modelPlugin.hostedOnly"));
+    }
     const { config } = args;
     const http = createPluginHttp(config, { signal: args.signal, referenceMedia: args.referenceMedia });
     const request = createPluginRequest(config, { signal: args.signal });
@@ -137,6 +144,7 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
         "sleep",
         "signal",
         "onDelta",
+        "downloadGeminiVideo",
         `"use strict"; return (async () => {\n${args.script}\n})();`,
     ) as (...fnArgs: unknown[]) => Promise<T>;
     try {
@@ -158,6 +166,7 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
             (ms: number) => sleep(ms, args.signal),
             args.signal,
             args.onDelta,
+            (uri: string) => downloadGeminiVideo(uri, config, args.signal),
         );
     } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") throw error;
@@ -674,7 +683,7 @@ async function generateVideo({
     },
   });
 
-  return await poll(
+  const uri = await poll(
     () => request({
       method: "get",
       url: \`\${baseUrl}/v1beta/\${op.name}\`,
@@ -687,12 +696,11 @@ async function generateVideo({
       if (!state.done) return null;
       const uri = state.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri;
       if (!uri) throw new Error("Gemini did not return a video URI");
-      if (uri.includes("key=")) return { url: uri };
-      const separator = uri.includes("?") ? "&" : "?";
-      return { url: uri + separator + "key=" + apiKey };
+      return uri;
     },
     { intervalMs: 5000, timeoutMs: 300000 },
   );
+  return { blob: await downloadGeminiVideo(uri) };
 }
 
 return await generateVideo({

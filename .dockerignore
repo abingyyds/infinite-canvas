@@ -12,3 +12,5 @@ web/out
 *.log
 .env*
 !.env.example
+plugins/canvas/*/node_modules
+plugins/canvas/*/dist

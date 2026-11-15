@@ -13,8 +13,9 @@ import (
 )
 
 type mediaContentRequest struct {
-	URL    string `json:"url"`
-	APIKey string `json:"apiKey"`
+	URL            string `json:"url"`
+	APIKey         string `json:"apiKey"`
+	CredentialType string `json:"credentialType"`
 }
 
 var mediaClient = newMediaClient()
@@ -95,6 +96,7 @@ func newMediaClient() *http.Client {
 			}
 			if req.URL.Scheme != via[0].URL.Scheme || !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
 				req.Header.Del("Authorization")
+				req.Header.Del("X-Goog-Api-Key")
 				req.Header.Del("Referer")
 			}
 			return nil
@@ -127,7 +129,11 @@ func serveMediaContent(w http.ResponseWriter, r *http.Request, client *http.Clie
 		return
 	}
 	if apiKey != "" {
-		request.Header.Set("Authorization", "Bearer "+apiKey)
+		if payload.CredentialType == "gemini" {
+			request.Header.Set("X-Goog-Api-Key", apiKey)
+		} else {
+			request.Header.Set("Authorization", "Bearer "+apiKey)
+		}
 	}
 	response, err := client.Do(request)
 	if errors.Is(err, errNonPublicMediaAddress) {

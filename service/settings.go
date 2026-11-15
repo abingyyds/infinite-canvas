@@ -16,7 +16,16 @@ import (
 	"github.com/basketikun/infinite-canvas/repository"
 )
 
-var adminModelHTTPClient = &http.Client{Timeout: 30 * time.Second}
+var adminModelHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		original := via[0].URL
+		if len(via) >= 10 || req.URL.Scheme != original.Scheme || !strings.EqualFold(req.URL.Host, original.Host) {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	},
+}
 
 func PublicSettings() (model.PublicSetting, error) {
 	settings, err := repository.GetSettings()
@@ -34,7 +43,9 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 		return model.Settings{}, err
 	}
 	settings = normalizeSettings(settings)
-	keepPrivateAPIKeys(&settings, normalizeSettings(saved))
+	if err := keepPrivateAPIKeys(&settings, normalizeSettings(saved)); err != nil {
+		return model.Settings{}, err
+	}
 	keepPrivateAuthSecrets(&settings, normalizeSettings(saved))
 	result, err := repository.SaveSettings(settings, now())
 	return hidePrivateAPIKeys(result), err
@@ -143,15 +154,23 @@ func hidePrivateAPIKeys(settings model.Settings) model.Settings {
 	return settings
 }
 
-func keepPrivateAPIKeys(settings *model.Settings, saved model.Settings) {
+func keepPrivateAPIKeys(settings *model.Settings, saved model.Settings) error {
 	for i := range settings.Private.Channels {
-		if strings.TrimSpace(settings.Private.Channels[i].APIKey) != "" {
+		channel := &settings.Private.Channels[i]
+		if strings.TrimSpace(channel.APIKey) != "" {
 			continue
 		}
-		if channel, ok := findSavedChannel(settings.Private.Channels[i], saved.Private.Channels, i); ok {
-			settings.Private.Channels[i].APIKey = channel.APIKey
+		if previous, ok := findSavedChannelKey(*channel, saved.Private.Channels, i); ok {
+			channel.APIKey = previous
+			continue
+		}
+		for _, previous := range saved.Private.Channels {
+			if channel.Enabled && channel.Name == previous.Name && previous.APIKey != "" {
+				return safeMessageError{message: "渠道接口地址已变更，请重新输入 API Key"}
+			}
 		}
 	}
+	return nil
 }
 
 func keepPrivateAuthSecrets(settings *model.Settings, saved model.Settings) {
@@ -160,16 +179,42 @@ func keepPrivateAuthSecrets(settings *model.Settings, saved model.Settings) {
 	}
 }
 
-func findSavedChannel(channel model.ModelChannel, saved []model.ModelChannel, index int) (model.ModelChannel, bool) {
-	for _, item := range saved {
-		if item.Name == channel.Name && item.BaseURL == channel.BaseURL {
-			return item, true
+func modelChannelEndpoint(channel model.ModelChannel) string {
+	raw, err := url.Parse(strings.TrimSpace(channel.BaseURL))
+	if err != nil || raw.Hostname() == "" || (raw.Scheme != "http" && raw.Scheme != "https") ||
+		raw.User != nil || raw.RawQuery != "" || raw.ForceQuery || raw.Fragment != "" {
+		return ""
+	}
+	target, err := url.Parse(BuildModelChannelURL(channel, ""))
+	if err != nil {
+		return ""
+	}
+	target.Host = strings.ToLower(target.Host)
+	return target.String()
+}
+
+func findSavedChannelKey(channel model.ModelChannel, saved []model.ModelChannel, index int) (string, bool) {
+	endpoint := modelChannelEndpoint(channel)
+	if endpoint == "" {
+		return "", false
+	}
+	sameEndpoint := func(previous model.ModelChannel) bool {
+		return channel.Protocol == previous.Protocol && modelChannelEndpoint(previous) == endpoint
+	}
+	if index >= 0 && index < len(saved) && sameEndpoint(saved[index]) && channel.Name == saved[index].Name {
+		return saved[index].APIKey, true
+	}
+	key, matched := "", false
+	for _, previous := range saved {
+		if channel.Name != previous.Name || !sameEndpoint(previous) {
+			continue
 		}
+		if matched {
+			return "", false
+		}
+		key, matched = previous.APIKey, true
 	}
-	if index < len(saved) {
-		return saved[index], true
-	}
-	return model.ModelChannel{}, false
+	return key, matched
 }
 
 func SelectModelChannel(modelName string) (model.ModelChannel, error) {
@@ -314,28 +359,27 @@ func resolveAdminChannel(index *int, channel model.ModelChannel) (model.ModelCha
 			return model.ModelChannel{}, err
 		}
 		saved := normalizePrivateSetting(settings.Private).Channels
+		savedIndex := -1
 		if index != nil && *index >= 0 && *index < len(saved) {
-			if resolved.APIKey == "" {
-				resolved.APIKey = saved[*index].APIKey
+			savedIndex = *index
+			previous := saved[savedIndex]
+			if channel.Protocol == "" {
+				resolved.Protocol = previous.Protocol
 			}
 			if resolved.BaseURL == "" {
-				resolved.BaseURL = saved[*index].BaseURL
+				resolved.BaseURL = previous.BaseURL
 			}
 			if resolved.Name == "" {
-				resolved.Name = saved[*index].Name
+				resolved.Name = previous.Name
 			}
 		}
-		if resolved.APIKey == "" {
-			if savedChannel, ok := findSavedChannel(resolved, saved, -1); ok {
-				resolved.APIKey = savedChannel.APIKey
-			}
-		}
+		resolved.APIKey, _ = findSavedChannelKey(resolved, saved, savedIndex)
 	}
 	if strings.TrimSpace(resolved.BaseURL) == "" {
 		return model.ModelChannel{}, safeMessageError{message: "缺少接口地址"}
 	}
 	if strings.TrimSpace(resolved.APIKey) == "" {
-		return model.ModelChannel{}, safeMessageError{message: "缺少 API Key"}
+		return model.ModelChannel{}, safeMessageError{message: "请为此渠道地址输入 API Key"}
 	}
 	return resolved, nil
 }
@@ -352,7 +396,7 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 	}
 	defer response.Body.Close()
 	body, _ := io.ReadAll(response.Body)
-	if response.StatusCode >= http.StatusBadRequest {
+	if response.StatusCode >= http.StatusMultipleChoices {
 		if response.StatusCode == http.StatusNotFound && isArkAgentPlanChannel(channel) {
 			return nil, safeMessageError{message: "火山方舟 Agent Plan 未提供 OpenAI /models 模型列表接口，请手动填写模型名称，例如 doubao-seedance-2.0。"}
 		}
@@ -397,7 +441,7 @@ func testAdminChannelModel(channel model.ModelChannel, modelName string) (string
 	}
 	defer response.Body.Close()
 	responseBody, _ := io.ReadAll(response.Body)
-	if response.StatusCode >= http.StatusBadRequest {
+	if response.StatusCode >= http.StatusMultipleChoices {
 		return "", readAdminChannelError(responseBody, response.StatusCode, "测试失败")
 	}
 	var payload struct {

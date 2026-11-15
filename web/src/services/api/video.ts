@@ -13,6 +13,7 @@ import { isGatewayModel } from "@/services/gateway-channel";
 import { buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { runModelPlugin } from "./model-plugin";
+import { downloadGeminiVideo } from "./gemini-video-download";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
@@ -616,8 +617,9 @@ async function pollGeminiVideoTask(config: AiConfig, task: VideoGenerationTask, 
         if (!state.done) return { status: "pending" };
         const uri = state.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri;
         if (!uri) return { status: "failed", error: apiText("noPlayableVideo") };
-        const url = uri.includes("key=") ? uri : `${uri}${uri.includes("?") ? "&" : "?"}key=${config.apiKey}`;
-        return { status: "completed", result: await videoResultFromUrl(url, config, false, task, options) };
+        const blob = await downloadGeminiVideo(uri, config, options?.signal);
+        await assertVideoBlob(blob);
+        return { status: "completed", result: { blob } };
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("videoTaskQueryFailed")));
     }

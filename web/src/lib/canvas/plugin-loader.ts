@@ -3,6 +3,8 @@ import { getPluginRuntime } from "@/lib/canvas/plugin-runtime";
 import { usePluginStore, type InstalledPlugin } from "@/stores/canvas/use-plugin-store";
 import type { CanvasPlugin } from "@/types/canvas-plugin";
 import i18n from "@/i18n";
+import { HOSTED_CANVAS } from "@/constant/runtime-config";
+import { fetchOfficialPlugins, type OfficialPluginEntry } from "@/lib/canvas/plugin-registry";
 
 const cleanups = new Map<string, () => void>();
 
@@ -56,9 +58,42 @@ function withCacheBust(url: string) {
     return `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`;
 }
 
+let hostedPlugins: Promise<OfficialPluginEntry[]> | undefined;
+
+function hostedPluginCatalog() {
+    hostedPlugins ??= fetchOfficialPlugins().catch((error) => {
+        hostedPlugins = undefined;
+        throw error;
+    });
+    return hostedPlugins;
+}
+
+async function loadHostedPlugin(entry: OfficialPluginEntry) {
+    const target = new URL(entry.url);
+    if (target.origin !== window.location.origin || target.pathname !== `/official-plugins/${entry.id}.js` || target.search || target.hash) {
+        throw new Error(i18n.t("canvas.pluginErrors.hostedOnly"));
+    }
+    const response = await fetch(target, { redirect: "error" });
+    if (!response.ok || !(response.headers.get("content-type") || "").includes("javascript")) {
+        throw new Error(i18n.t("canvas.pluginErrors.downloadFailed", { status: response.status }));
+    }
+    const plugin = await evaluatePluginSource(await response.text());
+    if (plugin.id !== entry.id || plugin.version !== entry.version) throw new Error(i18n.t("canvas.pluginErrors.invalidExport"));
+    deactivatePlugin(plugin.id);
+    usePluginStore.getState().upsert({ id: plugin.id, name: plugin.name || plugin.id, version: entry.version, description: plugin.description, url: entry.url, source: "", enabled: true, official: true });
+    activatePlugin(plugin);
+    return plugin;
+}
+
 // Install or replace a plugin from a URL and enable it immediately.
 // bustCache bypasses HTTP/CDN caches during upgrades while persisting a clean URL without the timestamp query.
 export async function installPluginFromUrl(url: string, opts?: { official?: boolean; bustCache?: boolean }) {
+    if (HOSTED_CANVAS) {
+        const absoluteUrl = new URL(url, window.location.origin).href;
+        const entry = (await hostedPluginCatalog()).find((item) => item.url === absoluteUrl);
+        if (!entry) throw new Error(i18n.t("canvas.pluginErrors.hostedOnly"));
+        return loadHostedPlugin(entry);
+    }
     const source = await fetchPluginSource(opts?.bustCache ? withCacheBust(url) : url);
     const plugin = await evaluatePluginSource(source);
     deactivatePlugin(plugin.id); // Replace the previous version.
@@ -68,11 +103,20 @@ export async function installPluginFromUrl(url: string, opts?: { official?: bool
 }
 
 export async function updatePlugin(record: InstalledPlugin) {
+    if (HOSTED_CANVAS) {
+        const entry = (await hostedPluginCatalog()).find((item) => item.id === record.id);
+        if (!entry) throw new Error(i18n.t("canvas.pluginErrors.hostedOnly"));
+        return loadHostedPlugin(entry);
+    }
     // Upgrades must fetch the latest output and therefore always bypass caches.
     return installPluginFromUrl(record.url, { official: record.official, bustCache: true });
 }
 
 export async function setPluginEnabled(record: InstalledPlugin, enabled: boolean) {
+    if (HOSTED_CANVAS && enabled) {
+        await updatePlugin(record);
+        return;
+    }
     usePluginStore.getState().setEnabled(record.id, enabled);
     if (!enabled) {
         deactivatePlugin(record.id);
@@ -96,6 +140,24 @@ export async function ensurePluginsLoaded() {
     if (loaded) return;
     loaded = true;
     await usePluginStore.persist.rehydrate();
+    if (HOSTED_CANVAS) {
+        const installed = usePluginStore.getState().plugins.filter((record) => record.enabled);
+        if (!installed.length) return;
+        const catalog = await hostedPluginCatalog();
+        await Promise.all(installed.map(async (record) => {
+            const entry = catalog.find((item) => item.id === record.id);
+            if (!entry) {
+                usePluginStore.getState().setEnabled(record.id, false);
+                return;
+            }
+            try {
+                await loadHostedPlugin(entry);
+            } catch (error) {
+                console.error(`[plugin] Failed to load: ${record.id}`, error);
+            }
+        }));
+        return;
+    }
     await loadLocalPlugins(); // Discover disabled local plugins first, then activate all enabled records.
     const records = usePluginStore.getState().plugins.filter((record) => record.enabled);
     await Promise.all(
