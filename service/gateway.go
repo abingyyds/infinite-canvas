@@ -101,17 +101,41 @@ type gatewayModelRow struct {
 	Category string
 }
 
-var gatewayHTTPClient = &http.Client{Timeout: 30 * time.Second}
+var gatewayHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+func configuredGatewayLoginSources(request GatewayLoginRequest) []GatewayLoginSource {
+	provider := normalizeGatewayProvider(request.Provider)
+	if request.Provider != "" && provider == "" {
+		return nil
+	}
+	hasBaseURL := strings.TrimSpace(request.BaseURL) != ""
+	if provider == "" && hasBaseURL {
+		provider = model.GatewayProviderMain
+	}
+	baseURL := apiBaseURL(request.BaseURL)
+	siteHost := normalizeGatewaySiteHost(request.SiteHost)
+
+	var sources []GatewayLoginSource
+	for _, source := range DefaultGatewayLoginSources() {
+		if provider != "" && provider != source.Provider ||
+			hasBaseURL && baseURL != apiBaseURL(source.BaseURL) ||
+			request.SiteHost != "" && (siteHost == "" || siteHost != source.SiteHost) {
+			continue
+		}
+		sources = append(sources, source)
+	}
+	return sources
+}
 
 func LoginWithGateway(request GatewayLoginRequest) (GatewayLoginSession, error) {
-	sources := normalizeGatewaySources([]GatewayLoginSource{{Provider: request.Provider, BaseURL: request.BaseURL, SiteHost: request.SiteHost}})
-	if request.Provider == "" && strings.TrimSpace(request.BaseURL) != "" {
-		sources = normalizeGatewaySources([]GatewayLoginSource{
-			{Provider: model.GatewayProviderMain, BaseURL: request.BaseURL, SiteHost: request.SiteHost},
-		})
-	}
+	sources := configuredGatewayLoginSources(request)
 	if len(sources) == 0 {
-		return GatewayLoginSession{}, safeMessageError{message: "网关登录源未配置"}
+		return GatewayLoginSession{}, safeMessageError{message: "该网关登录源未获允许"}
 	}
 	var lastErr error
 	for _, source := range sources {
@@ -190,6 +214,9 @@ func RefreshGatewayModels(userID string) ([]string, error) {
 	if err != nil || !ok {
 		return nil, safeMessageError{message: "未连接网关账号"}
 	}
+	if !isConfiguredGatewayBase(account.BaseURL) {
+		return nil, safeMessageError{message: "网关登录源已变更，请重新登录"}
+	}
 	fetched, err := fetchGatewayModels(account)
 	if err != nil {
 		return nil, err
@@ -205,6 +232,9 @@ func UserGatewayChannel(userID string, modelName string) (model.ModelChannel, bo
 	account, ok, err := repository.FirstGatewayAccountByUser(userID)
 	if err != nil || !ok {
 		return model.ModelChannel{}, false, err
+	}
+	if !isConfiguredGatewayBase(account.BaseURL) {
+		return model.ModelChannel{}, false, safeMessageError{message: "网关登录源已变更，请重新登录"}
 	}
 	if strings.TrimSpace(account.APIKey) == "" {
 		return model.ModelChannel{}, false, nil
@@ -235,6 +265,9 @@ func RefreshUserGatewayKey(userID string, staleKey string) (string, error) {
 	account, ok, err := repository.FirstGatewayAccountByUser(userID)
 	if err != nil || !ok {
 		return "", err
+	}
+	if !isConfiguredGatewayBase(account.BaseURL) {
+		return "", safeMessageError{message: "网关登录源已变更，请重新登录"}
 	}
 	// 并发的失败请求里已经有一个重签过了
 	if account.APIKey != staleKey {
@@ -290,6 +323,15 @@ func DefaultGatewayLoginSources() []GatewayLoginSource {
 		raw = append(raw, GatewayLoginSource{Provider: model.GatewayProviderMain, BaseURL: config.Cfg.GatewayBaseURL, SiteHost: config.Cfg.GatewaySiteHost})
 	}
 	return normalizeGatewaySources(raw)
+}
+
+func isConfiguredGatewayBase(baseURL string) bool {
+	for _, source := range DefaultGatewayLoginSources() {
+		if apiBaseURL(source.BaseURL) == apiBaseURL(baseURL) {
+			return true
+		}
+	}
+	return false
 }
 
 func loginGatewaySource(source GatewayLoginSource, username string, password string, turnstileToken string, twoFactorCode string) (gatewayLoginResult, error) {

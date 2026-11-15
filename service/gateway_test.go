@@ -201,3 +201,26 @@ func TestFetchGatewayModelsUsesDistributorTokenWithoutSiteHost(t *testing.T) {
 		}
 	}
 }
+
+func TestExplicitGatewayLoginSelectsConfiguredSource(t *testing.T) {
+	oldConfig := config.Cfg
+	t.Cleanup(func() { config.Cfg = oldConfig })
+	config.Cfg = config.Config{
+		GatewayBaseURL:      "https://gateway.example.com",
+		GatewayLoginSources: "site@site.example.com=https://gateway.example.com",
+	}
+	for _, tc := range []struct {
+		request GatewayLoginRequest
+		expects int
+	}{
+		{GatewayLoginRequest{BaseURL: "https://gateway.example.com/v1"}, 1},
+		{GatewayLoginRequest{Provider: model.GatewayProviderSite, SiteHost: "site.example.com"}, 1},
+		{GatewayLoginRequest{BaseURL: "https://unregistered.example.com"}, 0},
+		{GatewayLoginRequest{Provider: model.GatewayProviderSite, SiteHost: "unregistered.example.com"}, 0},
+		{GatewayLoginRequest{BaseURL: "/v1"}, 0},
+	} {
+		if got := configuredGatewayLoginSources(tc.request); len(got) != tc.expects {
+			t.Errorf("configuredGatewayLoginSources(%+v) = %v, want %d sources", tc.request, got, tc.expects)
+		}
+	}
+}

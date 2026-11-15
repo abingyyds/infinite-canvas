@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 )
@@ -19,7 +20,7 @@ func TestMediaContentWithoutAPIKeySendsNoAuthorization(t *testing.T) {
 
 	request := httptest.NewRequest(http.MethodPost, "/api/media-content", strings.NewReader(`{"url":"`+upstream.URL+`"}`))
 	recorder := httptest.NewRecorder()
-	MediaContent(recorder, request)
+	serveMediaContent(recorder, request, upstream.Client())
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
@@ -45,12 +46,65 @@ func TestMediaContentForwardsAPIKeyAsBearer(t *testing.T) {
 
 	request := httptest.NewRequest(http.MethodPost, "/api/video-content", strings.NewReader(`{"url":"`+upstream.URL+`","apiKey":"sk-test"}`))
 	recorder := httptest.NewRecorder()
-	MediaContent(recorder, request)
+	serveMediaContent(recorder, request, upstream.Client())
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 	if gotAuth != "Bearer sk-test" {
 		t.Errorf("upstream Authorization = %q, want Bearer sk-test", gotAuth)
+	}
+}
+
+func TestMediaNetworkPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		ip     string
+		public bool
+	}{
+		{"8.8.8.8", true},
+		{"2606:4700::1111", true},
+		{"127.0.0.1", false},
+		{"10.0.0.1", false},
+		{"100.64.0.1", false},
+		{"169.254.169.254", false},
+		{"::1", false},
+		{"::ffff:10.0.0.1", false},
+		{"fd00::1", false},
+	} {
+		if got := isPublicMediaIP(netip.MustParseAddr(tc.ip)); got != tc.public {
+			t.Errorf("isPublicMediaIP(%s) = %t, want %t", tc.ip, got, tc.public)
+		}
+	}
+}
+
+func TestMediaContentDoesNotServeActiveContent(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
+		_, _ = w.Write([]byte("fixture"))
+	}))
+	defer upstream.Close()
+	request := httptest.NewRequest(http.MethodPost, "/api/media-content", strings.NewReader(`{"url":"`+upstream.URL+`"}`))
+	recorder := httptest.NewRecorder()
+	serveMediaContent(recorder, request, upstream.Client())
+	if recorder.Header().Get("Content-Type") != "application/octet-stream" || recorder.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatal("active media response was not served as a download")
+	}
+}
+
+func TestMediaRedirectCredentialsStayOnOrigin(t *testing.T) {
+	original := httptest.NewRequest(http.MethodGet, "https://media.example.com/video", nil)
+	for _, tc := range []struct{ target, auth string }{
+		{"https://media.example.com/asset", "Bearer fixture"},
+		{"https://cdn.example.com/asset", ""},
+		{"http://media.example.com/asset", ""},
+	} {
+		redirect := httptest.NewRequest(http.MethodGet, tc.target, nil)
+		redirect.Header.Set("Authorization", "Bearer fixture")
+		if err := newMediaClient().CheckRedirect(redirect, []*http.Request{original}); err != nil {
+			t.Fatal(err)
+		}
+		if got := redirect.Header.Get("Authorization"); got != tc.auth {
+			t.Errorf("redirect to %s has unexpected Authorization header", tc.target)
+		}
 	}
 }
